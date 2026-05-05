@@ -72,7 +72,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [ ] Prompt produces: list of broad topics with subtopics, plus per-episode topic/subtopic assignments with confidence (0.0–1.0) and a short reason string
 - [ ] Validate response shape; reject malformed batches; retry once
 - [ ] Persist to `topics`, `subtopics`, junction tables, `discovery_runs` *(persistence done; awaits real payload)*
-- [ ] CLI: `analyze <channel>` runs ingestion + discovery in one go *(next Ralph iteration)*
+- [x] CLI: `analyze --db-path --project-name --channel-input --stub` chains channel resolve → metadata upsert → videos fetch+upsert → `run_discovery(stub_llm)` (Ralph iteration 3, commit `cc70ccd`)
 
 #### A3. Topic map UI (extend `review_ui.py`)
 - [ ] Render auto-discovered topic map: topics with episode counts, subtopic counts, average confidence
