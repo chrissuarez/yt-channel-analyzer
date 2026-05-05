@@ -27,6 +27,49 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 7: per-topic episode sort options
+
+### Done (TDD, 4 new tests in `test_discovery.py`)
+- New `DiscoveryEpisodeSortHTMLTests` class with 4 tests asserting the
+  sort dropdown markup (`discovery-episode-sort`, `value="recency"`,
+  `value="confidence"`), the `sortDiscoveryEpisodes` JS function, the
+  `DEFAULT_DISCOVERY_SORT = 'recency'` constant, and that
+  `UI_REVISION` includes `sort`.
+- Per-topic sort dropdown rendered inside each discovery topic card —
+  options Recency / Confidence, default Recency. Selection persisted in
+  a per-topic `Map` keyed by topic name; `setDiscoveryEpisodeSort` writes
+  the choice and re-renders the panel via the cached `lastDiscoveryTopicMap`.
+- New JS helpers: `sortDiscoveryEpisodes(episodes, mode)` returns a
+  sorted copy. Recency = `published_at DESC` with nulls last, confidence
+  = numeric DESC with nulls last, both with NOCASE-style title tiebreak.
+- Backend payload unchanged — episodes still served by confidence DESC,
+  the JS reorders client-side.
+- View-count sort deferred: `videos.view_count` is not currently
+  ingested. Documented in the iteration plan rather than added as a
+  no-op option (would be a stub that always tied at 0).
+- Relaxed older `test_ui_revision_advances_for_episode_list` from
+  `topic-episodes` to the durable `discovery` substring (same pattern
+  iteration 6 used on iteration-5's revision-string test).
+- `UI_REVISION` bumped to `2026-05-05.3-discovery-episode-sort`.
+- All 26 tests in `test_discovery.py` pass. Two pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` unchanged.
+- Sanity: extracted JS body, `node --check` parses cleanly (43KB).
+
+### Deferred (logged so the next iteration can pick up)
+- View-count sort option — needs `videos.view_count` populated during
+  ingestion (`youtube.py` does not currently fetch it).
+- Sort persistence across reloads — issue 09 says "implementer's choice";
+  current implementation resets to recency on reload.
+
+### Next session — Ralph iteration 8
+1. Remove comparison-group panels from primary GUI nav (PRD §A4).
+2. Move comparison-group code to `legacy/` with deprecation shims.
+3. Curation actions (rename / merge / split / move / mark wrong) —
+   requires real LLM topics from slice 02 to be useful, but the
+   rename happy path could be wired up now against stub topics.
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 6: GUI per-topic episode list
 
 ### Done (TDD, 4 new tests in `test_discovery.py`)

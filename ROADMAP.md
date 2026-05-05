@@ -81,7 +81,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Per-episode card: title, thumbnail, "why this episode is here" reason, confidence indicator (Ralph iteration 6, commit `f2db466`; faded/muted styling for low confidence; guest deferred — not currently extracted)
 - [x] Episodes appear under every topic they belong to (multi-topic display) (Ralph iteration 6)
 - [ ] Curation actions: rename topic, merge two topics, split a topic, move episode between subtopics, mark assignment as wrong
-- [ ] Sort options for episode lists: recency, view count, confidence
+- [x] Sort options for episode lists: recency, confidence (Ralph iteration 7, JS-side per-topic dropdown, default recency; view count deferred — not currently ingested)
 
 #### A4. Move legacy code
 - [ ] Create `legacy/` directory
