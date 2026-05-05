@@ -55,20 +55,24 @@ The smallest version of the app that solves a real user problem ("which episodes
 ### Phase A — concrete next steps
 
 #### A1. Schema extension for multi-topic membership
-- [ ] Add `video_topics` junction table: `(video_id, topic_id, confidence, source, reason)`
-- [ ] Add `video_subtopics` junction table: `(video_id, subtopic_id, confidence, source, reason)`
-- [ ] Add `discovery_runs` table to track Phase A runs (one per channel discovery pass)
+- [x] Add `video_topics` junction table: `(video_id, topic_id, confidence, source, reason)` — extended existing table with `confidence`, `reason`, `discovery_run_id`; `assignment_source` CHECK now allows `'auto'`
+- [x] Add `video_subtopics` junction table: `(video_id, subtopic_id, confidence, source, reason)` — same shape as `video_topics`
+- [x] Add `discovery_runs` table to track Phase A runs (one per channel discovery pass)
+- [x] Repair path: `_repair_video_topic_assignment_source_constraint` rebuilds old-shape junction tables whose CHECK lacks `'auto'` (rename → recreate → INSERT SELECT → drop)
 - [ ] Migration that backfills existing primary/secondary topic data into the junction table
 - [ ] Existing primary/secondary columns retained for backward compatibility but no longer authoritative
 
 #### A2. Discovery module (`discovery.py`)
+- [x] Module skeleton with `DiscoveryVideo`, `DiscoveryAssignment`, `DiscoveryPayload`, `run_discovery(...)` — LLM injected as a callable; persists run + topics + assignments
+- [x] Stub LLM (`stub_llm` returns one topic "General" with every video assigned, confidence=1.0); constants `STUB_MODEL` / `STUB_PROMPT_VERSION`
+- [x] CLI `discover --db-path --project-name --stub` wired to `run_discovery` (the `--stub` flag is required until the real LLM lands)
 - [ ] Pull all videos for the channel: title, description, chapter markers
 - [ ] Pre-filter common boilerplate (sponsor reads, social calls-to-action) from descriptions
 - [ ] Build a single batched LLM call (Haiku 4.5 or GPT-4o-mini)
 - [ ] Prompt produces: list of broad topics with subtopics, plus per-episode topic/subtopic assignments with confidence (0.0–1.0) and a short reason string
 - [ ] Validate response shape; reject malformed batches; retry once
-- [ ] Persist to `topics`, `subtopics`, junction tables, `discovery_runs`
-- [ ] CLI: `analyze <channel>` runs ingestion + discovery in one go
+- [ ] Persist to `topics`, `subtopics`, junction tables, `discovery_runs` *(persistence done; awaits real payload)*
+- [ ] CLI: `analyze <channel>` runs ingestion + discovery in one go *(next Ralph iteration)*
 
 #### A3. Topic map UI (extend `review_ui.py`)
 - [ ] Render auto-discovered topic map: topics with episode counts, subtopic counts, average confidence
