@@ -910,7 +910,35 @@ class DiscoveryTopicEpisodesHTMLTests(unittest.TestCase):
     def test_ui_revision_advances_for_episode_list(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("topic-episodes", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryEpisodeSortHTMLTests(unittest.TestCase):
+    def test_html_page_has_episode_sort_dropdown_markup(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-episode-sort", html)
+        self.assertIn('value="recency"', html)
+        self.assertIn('value="confidence"', html)
+
+    def test_html_page_defines_sort_function(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function sortDiscoveryEpisodes", html)
+
+    def test_default_sort_is_recency(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("DEFAULT_DISCOVERY_SORT", html)
+        self.assertIn("'recency'", html)
+
+    def test_ui_revision_advances_for_episode_sort(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("sort", UI_REVISION)
 
 
 if __name__ == "__main__":

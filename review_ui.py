@@ -51,7 +51,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.2-discovery-topic-episodes"
+UI_REVISION = "2026-05-05.3-discovery-episode-sort"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -278,6 +278,22 @@ HTML_PAGE = """<!doctype html>
     }
     .discovery-episode-empty {
       margin-top: 10px;
+      font-size: 12px;
+    }
+    .discovery-episode-sort-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .discovery-episode-sort {
+      background: rgba(11,16,32,0.6);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 4px 6px;
       font-size: 12px;
     }
     .topic-map-head {
@@ -865,7 +881,40 @@ HTML_PAGE = """<!doctype html>
       return '<span class="status-chip">No current suggestions</span>';
     }
 
+    const DEFAULT_DISCOVERY_SORT = 'recency';
+    const discoveryEpisodeSortByTopic = new Map();
+    let lastDiscoveryTopicMap = null;
+
+    function sortDiscoveryEpisodes(episodes, mode) {
+      const list = (episodes || []).slice();
+      const m = mode || DEFAULT_DISCOVERY_SORT;
+      if (m === 'confidence') {
+        list.sort((a, b) => {
+          const ac = (a.confidence == null) ? -Infinity : a.confidence;
+          const bc = (b.confidence == null) ? -Infinity : b.confidence;
+          if (bc !== ac) return bc - ac;
+          return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+        });
+      } else {
+        list.sort((a, b) => {
+          const ad = a.published_at || '';
+          const bd = b.published_at || '';
+          if (ad && !bd) return -1;
+          if (!ad && bd) return 1;
+          if (bd !== ad) return bd < ad ? -1 : 1;
+          return (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' });
+        });
+      }
+      return list;
+    }
+
+    function setDiscoveryEpisodeSort(topicName, mode) {
+      discoveryEpisodeSortByTopic.set(topicName, mode);
+      renderDiscoveryTopicMap(lastDiscoveryTopicMap);
+    }
+
     function renderDiscoveryTopicMap(map) {
+      lastDiscoveryTopicMap = map;
       const grid = document.getElementById('discovery-topic-map-grid');
       const meta = document.getElementById('discovery-topic-map-meta');
       if (!map) {
@@ -886,10 +935,24 @@ HTML_PAGE = """<!doctype html>
           ? ''
           : (confidence >= 0.33 ? 'low' : 'very-low');
         const barWidth = (confidence == null) ? 0 : Math.round(confidence * 100);
-        const episodes = topic.episodes || [];
-        const episodeListHtml = episodes.length
-          ? `<ol class="discovery-episode-list">${episodes.map(renderDiscoveryEpisodeItem).join('')}</ol>`
+        const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
+        const sortedEpisodes = sortDiscoveryEpisodes(topic.episodes, sortMode);
+        const episodeListHtml = sortedEpisodes.length
+          ? `<ol class="discovery-episode-list">${sortedEpisodes.map(renderDiscoveryEpisodeItem).join('')}</ol>`
           : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
+        const sortRowHtml = (topic.episodes && topic.episodes.length)
+          ? `<div class="discovery-episode-sort-row">
+              <label>Sort
+                <select class="discovery-episode-sort"
+                        data-discovery-sort
+                        data-topic-name="${escapeHtml(topic.name)}"
+                        onchange="setDiscoveryEpisodeSort(this.dataset.topicName, this.value)">
+                  <option value="recency" ${sortMode === 'recency' ? 'selected' : ''}>Recency</option>
+                  <option value="confidence" ${sortMode === 'confidence' ? 'selected' : ''}>Confidence</option>
+                </select>
+              </label>
+            </div>`
+          : '';
         return `
           <article class="topic-card discovery-topic-card">
             <h3>${escapeHtml(topic.name)}</h3>
@@ -898,6 +961,7 @@ HTML_PAGE = """<!doctype html>
               <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
             </div>
             <div class="confidence-bar ${barClass}"><span style="width:${barWidth}%"></span></div>
+            ${sortRowHtml}
             ${episodeListHtml}
           </article>
         `;
