@@ -51,7 +51,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.1-discovery-topic-map"
+UI_REVISION = "2026-05-05.2-discovery-topic-episodes"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -218,6 +218,68 @@ HTML_PAGE = """<!doctype html>
     }
     .confidence-bar.low > span { background: rgba(251, 191, 36, 0.6); }
     .confidence-bar.very-low > span { background: rgba(252, 165, 165, 0.6); }
+    .discovery-episode-list {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+      display: grid;
+      gap: 8px;
+    }
+    .discovery-episode {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr);
+      gap: 10px;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
+      background: rgba(11,16,32,0.42);
+    }
+    .discovery-episode.low { opacity: 0.78; }
+    .discovery-episode.very-low { opacity: 0.55; }
+    .discovery-episode-thumb {
+      width: 64px;
+      height: 36px;
+      object-fit: cover;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.05);
+    }
+    .discovery-episode-thumb.placeholder {
+      background: linear-gradient(135deg, rgba(125,211,252,0.18), rgba(134,239,172,0.10));
+    }
+    .discovery-episode-body { min-width: 0; }
+    .discovery-episode-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .discovery-episode-meta {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 3px;
+      font-size: 11px;
+    }
+    .discovery-episode-confidence {
+      font-weight: 700;
+      color: var(--good);
+    }
+    .discovery-episode.low .discovery-episode-confidence { color: var(--warn); }
+    .discovery-episode.very-low .discovery-episode-confidence { color: var(--bad); }
+    .discovery-episode-reason {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      font-style: italic;
+    }
+    .discovery-episode-empty {
+      margin-top: 10px;
+      font-size: 12px;
+    }
     .topic-map-head {
       display: flex;
       justify-content: space-between;
@@ -824,17 +886,47 @@ HTML_PAGE = """<!doctype html>
           ? ''
           : (confidence >= 0.33 ? 'low' : 'very-low');
         const barWidth = (confidence == null) ? 0 : Math.round(confidence * 100);
+        const episodes = topic.episodes || [];
+        const episodeListHtml = episodes.length
+          ? `<ol class="discovery-episode-list">${episodes.map(renderDiscoveryEpisodeItem).join('')}</ol>`
+          : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
         return `
-          <article class="topic-card">
+          <article class="topic-card discovery-topic-card">
             <h3>${escapeHtml(topic.name)}</h3>
             <div class="topic-stats">
               <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
               <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
             </div>
             <div class="confidence-bar ${barClass}"><span style="width:${barWidth}%"></span></div>
+            ${episodeListHtml}
           </article>
         `;
       }).join('');
+    }
+
+    function renderDiscoveryEpisodeItem(episode) {
+      const c = (episode.confidence == null) ? null : Math.max(0, Math.min(1, episode.confidence));
+      const pct = (c == null) ? '—' : `${Math.round(c * 100)}%`;
+      const lowClass = (c != null && c < 0.33) ? ' very-low' : ((c != null && c < 0.66) ? ' low' : '');
+      const reasonHtml = episode.reason
+        ? `<div class="discovery-episode-reason">${escapeHtml(episode.reason)}</div>`
+        : '';
+      const thumbHtml = episode.thumbnail_url
+        ? `<img class="discovery-episode-thumb" alt="" loading="lazy" src="${escapeHtml(episode.thumbnail_url)}">`
+        : '<div class="discovery-episode-thumb placeholder" aria-hidden="true"></div>';
+      return `
+        <li class="discovery-episode${lowClass}">
+          ${thumbHtml}
+          <div class="discovery-episode-body">
+            <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
+            <div class="discovery-episode-meta">
+              <span class="discovery-episode-confidence">${escapeHtml(pct)}</span>
+              <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
+            </div>
+            ${reasonHtml}
+          </div>
+        </li>
+      `;
     }
 
     function renderTopicMap(items) {
@@ -1654,7 +1746,8 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
 
         topic_rows = connection.execute(
             """
-            SELECT topics.name AS topic_name,
+            SELECT topics.id AS topic_id,
+                   topics.name AS topic_name,
                    COUNT(DISTINCT video_topics.video_id) AS episode_count,
                    AVG(video_topics.confidence) AS avg_confidence
             FROM video_topics
@@ -1665,6 +1758,38 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
             """,
             (run_row["id"],),
         ).fetchall()
+
+        episode_rows = connection.execute(
+            """
+            SELECT video_topics.topic_id AS topic_id,
+                   videos.youtube_video_id AS youtube_video_id,
+                   videos.title AS title,
+                   videos.thumbnail_url AS thumbnail_url,
+                   videos.published_at AS published_at,
+                   video_topics.confidence AS confidence,
+                   video_topics.reason AS reason
+            FROM video_topics
+            JOIN videos ON videos.id = video_topics.video_id
+            WHERE video_topics.discovery_run_id = ?
+            ORDER BY video_topics.confidence DESC, videos.title COLLATE NOCASE
+            """,
+            (run_row["id"],),
+        ).fetchall()
+
+    episodes_by_topic: dict[int, list[dict[str, Any]]] = {}
+    for row in episode_rows:
+        episodes_by_topic.setdefault(int(row["topic_id"]), []).append(
+            {
+                "youtube_video_id": row["youtube_video_id"],
+                "title": row["title"],
+                "thumbnail_url": row["thumbnail_url"],
+                "published_at": row["published_at"],
+                "confidence": (
+                    float(row["confidence"]) if row["confidence"] is not None else None
+                ),
+                "reason": row["reason"],
+            }
+        )
 
     return {
         "run_id": int(run_row["id"]),
@@ -1681,6 +1806,7 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
                     if row["avg_confidence"] is not None
                     else None
                 ),
+                "episodes": episodes_by_topic.get(int(row["topic_id"]), []),
             }
             for row in topic_rows
         ],

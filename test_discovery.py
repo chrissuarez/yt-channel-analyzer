@@ -787,7 +787,130 @@ class DiscoveryTopicMapHTMLTests(unittest.TestCase):
     def test_ui_revision_advances_for_discovery_topic_map_panel(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("discovery-topic-map", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryTopicMapEpisodesPayloadTests(unittest.TestCase):
+    def test_topic_includes_episode_list_with_reason_and_confidence(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            topics_by_name = {t["name"]: t for t in topic_map["topics"]}
+            health_episodes = topics_by_name["Health"]["episodes"]
+            self.assertEqual(len(health_episodes), 1)
+            ep = health_episodes[0]
+            self.assertEqual(ep["youtube_video_id"], "vid1")
+            self.assertEqual(ep["title"], "Sleep and the brain")
+            self.assertIn("thumbnail_url", ep)
+            self.assertIn("published_at", ep)
+            self.assertEqual(ep["reason"], "title mentions sleep")
+            self.assertAlmostEqual(ep["confidence"], 0.9)
+
+            business_episodes = topics_by_name["Business"]["episodes"]
+            self.assertEqual(
+                {e["youtube_video_id"] for e in business_episodes},
+                {"vid2"},
+            )
+
+    def test_multi_topic_episode_appears_under_each_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Business",
+                        confidence=0.4,
+                        reason="brain-as-startup metaphor",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topics_by_name = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }
+            health_ids = {e["youtube_video_id"] for e in topics_by_name["Health"]["episodes"]}
+            business_ids = {e["youtube_video_id"] for e in topics_by_name["Business"]["episodes"]}
+            self.assertIn("vid1", health_ids)
+            self.assertIn("vid1", business_ids)
+
+            business_episodes = topics_by_name["Business"]["episodes"]
+            confidences = [e["confidence"] for e in business_episodes]
+            self.assertEqual(confidences, sorted(confidences, reverse=True))
+            vid1_business = next(
+                e for e in business_episodes if e["youtube_video_id"] == "vid1"
+            )
+            self.assertEqual(vid1_business["reason"], "brain-as-startup metaphor")
+            self.assertAlmostEqual(vid1_business["confidence"], 0.4)
+
+
+class DiscoveryTopicEpisodesHTMLTests(unittest.TestCase):
+    def test_html_page_has_episode_list_renderer_hook(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-episode-list", html)
+        self.assertIn("topic.episodes", html)
+
+    def test_ui_revision_advances_for_episode_list(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("topic-episodes", UI_REVISION)
 
 
 if __name__ == "__main__":
