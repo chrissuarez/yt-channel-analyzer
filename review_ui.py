@@ -37,6 +37,7 @@ from yt_channel_analyzer.db import (
     reject_topic_suggestion_label,
     rename_comparison_group_suggestion_label,
     rename_subtopic_suggestion_label,
+    rename_topic,
     rename_topic_suggestion_label,
     store_video_comparison_group_suggestion,
     store_video_subtopic_suggestion,
@@ -51,7 +52,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.3-discovery-episode-sort"
+UI_REVISION = "2026-05-05.4-discovery-topic-rename"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -199,6 +200,27 @@ HTML_PAGE = """<!doctype html>
       background:
         radial-gradient(circle at top left, rgba(134, 239, 172, 0.10), transparent 32%),
         rgba(20, 27, 45, 0.78);
+    }
+    .discovery-topic-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .discovery-topic-header h3 {
+      margin: 0;
+    }
+    .discovery-topic-rename {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(125, 211, 252, 0.06);
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .discovery-topic-rename:hover {
+      background: rgba(125, 211, 252, 0.16);
     }
     .confidence-bar {
       position: relative;
@@ -913,6 +935,23 @@ HTML_PAGE = """<!doctype html>
       renderDiscoveryTopicMap(lastDiscoveryTopicMap);
     }
 
+    async function renameDiscoveryTopic(currentName) {
+      const proposed = window.prompt(`Rename discovery topic "${currentName}" to:`, currentName);
+      if (proposed == null) return;
+      const newName = proposed.trim();
+      if (!newName || newName === currentName) return;
+      const previousMode = discoveryEpisodeSortByTopic.get(currentName);
+      if (previousMode !== undefined) {
+        discoveryEpisodeSortByTopic.delete(currentName);
+        discoveryEpisodeSortByTopic.set(newName, previousMode);
+      }
+      await mutate(
+        '/api/discovery/topic/rename',
+        { current_name: currentName, new_name: newName },
+        `Renamed discovery topic "${currentName}" to "${newName}".`,
+      );
+    }
+
     function renderDiscoveryTopicMap(map) {
       lastDiscoveryTopicMap = map;
       const grid = document.getElementById('discovery-topic-map-grid');
@@ -955,7 +994,13 @@ HTML_PAGE = """<!doctype html>
           : '';
         return `
           <article class="topic-card discovery-topic-card">
-            <h3>${escapeHtml(topic.name)}</h3>
+            <div class="discovery-topic-header">
+              <h3>${escapeHtml(topic.name)}</h3>
+              <button class="discovery-topic-rename"
+                      type="button"
+                      data-topic-name="${escapeHtml(topic.name)}"
+                      onclick="renameDiscoveryTopic(this.dataset.topicName)">Rename</button>
+            </div>
             <div class="topic-stats">
               <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
               <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
@@ -1794,6 +1839,20 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
     }
 
 
+def _resolve_primary_project_name(db_path: Path) -> str:
+    primary_channel = get_primary_channel(db_path)
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT name FROM projects WHERE id = ?",
+            (primary_channel.project_id,),
+        ).fetchone()
+    if row is None:
+        raise ReviewUIError(
+            f"project not found for primary channel (project_id={primary_channel.project_id})"
+        )
+    return row[0]
+
+
 def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -2338,6 +2397,20 @@ class ReviewUIApp:
             return {
                 "ok": True,
                 "message": f"Renamed comparison-group label '{current_name}' to '{new_name}' under '{subtopic_name}' (row {label_id}).",
+            }
+        if path == "/api/discovery/topic/rename":
+            current_name = self._require_text(body, "current_name")
+            new_name = self._require_text(body, "new_name")
+            project_name = _resolve_primary_project_name(self.db_path)
+            topic_id = rename_topic(
+                self.db_path,
+                project_name=project_name,
+                current_name=current_name,
+                new_name=new_name,
+            )
+            return {
+                "ok": True,
+                "message": f"Renamed discovery topic '{current_name}' to '{new_name}' (row {topic_id}).",
             }
         raise ReviewUIError(f"Unsupported API route: {path}")
 

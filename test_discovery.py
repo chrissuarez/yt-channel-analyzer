@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import sqlite3
 import unittest
 from pathlib import Path
@@ -938,7 +940,166 @@ class DiscoveryEpisodeSortHTMLTests(unittest.TestCase):
     def test_ui_revision_advances_for_episode_sort(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("sort", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryTopicRenameTests(unittest.TestCase):
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_run(self, db_path: Path) -> None:
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def test_rename_endpoint_renames_topic_in_db(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/rename",
+                body={"current_name": "Health", "new_name": "Wellness"},
+            )
+
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload.get("ok"))
+
+            with connect(db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM topics").fetchall()
+                }
+            self.assertIn("Wellness", names)
+            self.assertNotIn("Health", names)
+
+    def test_rename_endpoint_updates_state_payload(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp, build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+
+            app = ReviewUIApp(db_path)
+            self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/rename",
+                body={"current_name": "Health", "new_name": "Wellness"},
+            )
+
+            payload = build_state_payload(db_path)
+            topics_by_name = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }
+            self.assertIn("Wellness", topics_by_name)
+            self.assertNotIn("Health", topics_by_name)
+            wellness_episode_ids = {
+                e["youtube_video_id"]
+                for e in topics_by_name["Wellness"]["episodes"]
+            }
+            self.assertEqual(wellness_episode_ids, {"vid1"})
+
+    def test_rename_endpoint_rejects_unknown_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/rename",
+                body={"current_name": "DoesNotExist", "new_name": "Nope"},
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", body.lower())
+
+    def test_rename_endpoint_rejects_collision_with_existing_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/rename",
+                body={"current_name": "Health", "new_name": "Business"},
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("already exists", body.lower())
+
+    def test_html_page_defines_rename_discovery_topic_function(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function renameDiscoveryTopic", html)
+        self.assertIn("/api/discovery/topic/rename", html)
+
+    def test_html_page_renders_rename_button_per_discovery_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-topic-rename", html)
+
+    def test_ui_revision_advances_for_rename(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("rename", UI_REVISION)
 
 
 if __name__ == "__main__":

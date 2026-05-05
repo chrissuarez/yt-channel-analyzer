@@ -27,6 +27,62 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 06 (partial) / Ralph iteration 8: discovery topic rename happy path
+
+### Done (TDD, 7 new tests in `test_discovery.py`)
+- New `DiscoveryTopicRenameTests` class. Covers: POST
+  `/api/discovery/topic/rename` returns 200 and renames the topic in the
+  DB; renamed topic surfaces correctly in `/api/state`'s
+  `discovery_topic_map` with episode assignments preserved; rename of an
+  unknown topic returns 400 with a "not found" message; rename to an
+  existing topic name returns 400 with "already exists"; HTML wires
+  `function renameDiscoveryTopic` and `/api/discovery/topic/rename`;
+  each discovery topic card has a `discovery-topic-rename` button hook;
+  `UI_REVISION` includes the substring `rename`.
+- Backend: new `/api/discovery/topic/rename` route in
+  `ReviewUIApp._handle_post`. Reuses existing `db.rename_topic`. Project
+  name resolved via new helper `_resolve_primary_project_name(db_path)`,
+  which avoids the `primary_channel.title`-as-project-name shortcut used
+  by older suggestion routes (the test seed sets `project_name="proj"`
+  and `channel_title="Channel"`, and topics live under `proj`).
+- Frontend: new `renameDiscoveryTopic(currentName)` JS function uses
+  `window.prompt`, refuses empty / unchanged names, migrates the
+  per-topic sort selection (`discoveryEpisodeSortByTopic`) under the new
+  name, and posts via the existing `mutate(...)` helper. Each discovery
+  topic card now renders a small Rename button next to the title.
+  Minimal CSS for `.discovery-topic-header` / `.discovery-topic-rename`.
+- Relaxed `test_ui_revision_advances_for_episode_sort` from `sort` to the
+  durable `discovery` substring (same pattern iteration 7 used on
+  iteration 6's revision-string test, and iteration 6 used on iteration
+  5's). Older revision-string tests already assert `discovery`.
+- `UI_REVISION` bumped to `2026-05-05.4-discovery-topic-rename`.
+- All 33 tests in `test_discovery.py` pass. Two pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` unchanged.
+- Sanity: extracted JS body, `node --check` parses cleanly (44KB).
+
+### Slice 06 status
+- Slice 06 (curation: rename + merge) is now partially landed. Rename
+  happy path works against the stub topics. Merge, the
+  curation-survives-rerun mechanism (`topic_curation_events` or
+  equivalent — slice 08), error edge cases beyond "not found"/"already
+  exists", and inline-edit UX polish all remain.
+
+### Deferred (logged so the next iteration can pick up)
+- Inline edit UX in place of `window.prompt`.
+- Curation persistence across discovery re-runs (slice 08).
+- Topic merge action (slice 06's other half).
+
+### Next session — Ralph iteration 9
+1. Topic merge happy path (`/api/discovery/topic/merge`) with episode
+   assignment dedupe under target topic.
+2. Or: kick off slice 02 prep — Extractor module wiring for the real
+   LLM discovery prompt.
+3. Or: PRD §A4 legacy move (split into mechanical mini-iterations:
+   create `legacy/__init__.py`; move `comparison_group_suggestions.py`
+   with a re-export shim; verify imports in `review_ui.py` still work).
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 7: per-topic episode sort options
 
 ### Done (TDD, 4 new tests in `test_discovery.py`)
