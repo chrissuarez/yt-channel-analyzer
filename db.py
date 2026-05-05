@@ -1937,6 +1937,110 @@ def split_topic(
     }
 
 
+def move_episode_subtopic(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    topic_name: str,
+    youtube_video_id: str,
+    target_subtopic_name: str,
+) -> dict[str, int | str | None]:
+    """Move (or attach) ``youtube_video_id`` to ``target_subtopic_name`` under
+    ``topic_name`` within ``project_name``.
+
+    The video must already be assigned to the topic. If it has an existing
+    `video_subtopics` row whose subtopic is *under* this topic, that row is
+    re-pointed at the target subtopic (no-op when already on the target).
+    Otherwise a new row is inserted with ``assignment_source='manual'`` to
+    flag this as a curation move.
+    """
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.cursor()
+        project_row = cursor.execute(
+            "SELECT id FROM projects WHERE name = ? ORDER BY id LIMIT 1",
+            (project_name,),
+        ).fetchone()
+        if project_row is None:
+            raise ValueError(f"project not found: {project_name}")
+        project_id = project_row[0]
+        topic_row = cursor.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, topic_name),
+        ).fetchone()
+        if topic_row is None:
+            raise ValueError(f"topic not found: {topic_name}")
+        topic_id = topic_row[0]
+        target_row = cursor.execute(
+            "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+            (topic_id, target_subtopic_name),
+        ).fetchone()
+        if target_row is None:
+            raise ValueError(
+                f"subtopic not found under '{topic_name}': {target_subtopic_name}"
+            )
+        target_subtopic_id = target_row[0]
+        video_row = cursor.execute(
+            "SELECT id FROM videos WHERE youtube_video_id = ?",
+            (youtube_video_id,),
+        ).fetchone()
+        if video_row is None:
+            raise ValueError(f"video not found: {youtube_video_id}")
+        video_internal_id = video_row[0]
+        on_topic = cursor.execute(
+            "SELECT 1 FROM video_topics WHERE video_id = ? AND topic_id = ?",
+            (video_internal_id, topic_id),
+        ).fetchone()
+        if on_topic is None:
+            raise ValueError(
+                f"video '{youtube_video_id}' is not assigned to topic '{topic_name}'"
+            )
+
+        existing = cursor.execute(
+            """
+            SELECT vs.subtopic_id, s.name
+            FROM video_subtopics vs
+            JOIN subtopics s ON s.id = vs.subtopic_id
+            WHERE vs.video_id = ? AND s.topic_id = ?
+            ORDER BY vs.subtopic_id
+            LIMIT 1
+            """,
+            (video_internal_id, topic_id),
+        ).fetchone()
+
+        moved = 0
+        inserted = 0
+        previous_subtopic_name: str | None = None
+        if existing is None:
+            cursor.execute(
+                """
+                INSERT INTO video_subtopics(video_id, subtopic_id, assignment_source)
+                VALUES (?, ?, 'manual')
+                """,
+                (video_internal_id, target_subtopic_id),
+            )
+            inserted = 1
+        else:
+            existing_subtopic_id, previous_subtopic_name = existing
+            if existing_subtopic_id != target_subtopic_id:
+                cursor.execute(
+                    """
+                    UPDATE video_subtopics
+                    SET subtopic_id = ?, assignment_source = 'manual'
+                    WHERE video_id = ? AND subtopic_id = ?
+                    """,
+                    (target_subtopic_id, video_internal_id, existing_subtopic_id),
+                )
+                moved = 1
+        connection.commit()
+    return {
+        "moved": moved,
+        "inserted": inserted,
+        "previous_subtopic_name": previous_subtopic_name,
+        "target_subtopic_id": target_subtopic_id,
+    }
+
+
 def assign_topic_to_video(
     db_path: str | Path,
     *,

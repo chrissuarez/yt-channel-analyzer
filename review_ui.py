@@ -32,6 +32,7 @@ from yt_channel_analyzer.db import (
     list_videos_for_comparison_group_suggestions,
     list_videos_for_subtopic_suggestions,
     list_videos_for_topic_suggestions,
+    move_episode_subtopic,
     reject_comparison_group_suggestion_label,
     reject_subtopic_suggestion_label,
     reject_topic_suggestion_label,
@@ -54,7 +55,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.6-discovery-topic-split"
+UI_REVISION = "2026-05-05.7-discovery-episode-move-subtopic"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -231,6 +232,19 @@ HTML_PAGE = """<!doctype html>
     .discovery-topic-rename:hover,
     .discovery-topic-merge:hover,
     .discovery-topic-split:hover {
+      background: rgba(125, 211, 252, 0.16);
+    }
+    .subtopic-video-move {
+      margin-left: 6px;
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: rgba(125, 211, 252, 0.06);
+      color: var(--accent);
+      cursor: pointer;
+    }
+    .subtopic-video-move:hover {
       background: rgba(125, 211, 252, 0.16);
     }
     .confidence-bar {
@@ -1179,12 +1193,55 @@ HTML_PAGE = """<!doctype html>
       return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div></div>`;
     }
 
+    function subtopicVideoChipHtml(video, topicName, currentSubtopic, candidateSubtopics) {
+      const moveButton = candidateSubtopics.length
+        ? `<button class="subtopic-video-move"
+                   type="button"
+                   onclick='moveEpisodeSubtopic(${JSON.stringify(topicName)}, ${JSON.stringify(currentSubtopic)}, ${JSON.stringify(video.youtube_video_id || '')}, ${JSON.stringify(candidateSubtopics)})'>Move</button>`
+        : '';
+      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div>${moveButton}</div>`;
+    }
+
+    async function moveEpisodeSubtopic(topicName, currentSubtopic, youtubeVideoId, candidates) {
+      if (!candidates || !candidates.length) {
+        setStatus(`No other subtopics under '${topicName}' to move to.`, true);
+        return;
+      }
+      const numbered = candidates.map((name, i) => `${i + 1}. ${name}`).join('\n');
+      const raw = window.prompt(
+        `Move '${youtubeVideoId}' from '${currentSubtopic}' to which subtopic under '${topicName}'?\n\n${numbered}\n\nEnter the number:`
+      );
+      if (raw == null) return;
+      const idx = parseInt(raw.trim(), 10);
+      if (!Number.isInteger(idx) || idx < 1 || idx > candidates.length) {
+        setStatus('Move cancelled: invalid selection.', true);
+        return;
+      }
+      const targetSubtopic = candidates[idx - 1];
+      if (!window.confirm(`Move '${youtubeVideoId}' from '${currentSubtopic}' to '${targetSubtopic}'?`)) return;
+      const result = await postJson('/api/discovery/episode/move-subtopic', {
+        topic_name: topicName,
+        youtube_video_id: youtubeVideoId,
+        target_subtopic_name: targetSubtopic,
+      });
+      if (!result) return;
+      setStatus(result.message || 'Moved.');
+      await fetchState();
+    }
+
     function topicInventoryHtml(inventory) {
       if (!inventory) return '';
       const buckets = inventory.subtopics || [];
+      const topicName = inventory.topic || '';
+      const allSubtopicNames = buckets.map((b) => b.name);
       const unassigned = inventory.unassigned_videos || [];
       const assignedHtml = buckets.length
-        ? buckets.map((bucket) => `
+        ? buckets.map((bucket) => {
+            const candidates = allSubtopicNames.filter((n) => n !== bucket.name);
+            const chips = bucket.videos.length
+              ? bucket.videos.map((v) => subtopicVideoChipHtml(v, topicName, bucket.name, candidates)).join('')
+              : '<div class="muted">No videos assigned yet.</div>';
+            return `
             <div class="subtopic-bucket">
               <strong>${escapeHtml(bucket.name)}</strong>
               <span class="pill">${escapeHtml(bucket.videos.length)} video(s)</span>
@@ -1192,10 +1249,11 @@ HTML_PAGE = """<!doctype html>
               <div class="muted">${escapeHtml(bucket.next_step || '')}</div>
               ${bucket.comparison_ready ? `<div class="subtopic-actions"><button class="primary-action" onclick='generateComparisonGroupsForSubtopic(${JSON.stringify(bucket.name)})'>Generate comparison groups</button></div>` : ''}
               <div class="video-list">
-                ${bucket.videos.length ? bucket.videos.map(videoChipHtml).join('') : '<div class="muted">No videos assigned yet.</div>'}
+                ${chips}
               </div>
             </div>
-          `).join('')
+          `;
+          }).join('')
         : '<div class="empty">No approved subtopics exist for this topic yet.</div>';
       const unassignedHtml = unassigned.length
         ? `<div class="video-list">${unassigned.map(videoChipHtml).join('')}</div>`
@@ -2565,6 +2623,34 @@ class ReviewUIApp:
                 ),
                 "stats": stats,
             }
+        if path == "/api/discovery/episode/move-subtopic":
+            topic_name = self._require_text(body, "topic_name")
+            youtube_video_id = self._require_text(body, "youtube_video_id")
+            target_subtopic_name = self._require_text(body, "target_subtopic_name")
+            project_name = _resolve_primary_project_name(self.db_path)
+            stats = move_episode_subtopic(
+                self.db_path,
+                project_name=project_name,
+                topic_name=topic_name,
+                youtube_video_id=youtube_video_id,
+                target_subtopic_name=target_subtopic_name,
+            )
+            if stats["moved"]:
+                msg = (
+                    f"Moved '{youtube_video_id}' from '{stats['previous_subtopic_name']}' "
+                    f"to '{target_subtopic_name}' under '{topic_name}'."
+                )
+            elif stats["inserted"]:
+                msg = (
+                    f"Attached '{youtube_video_id}' to subtopic '{target_subtopic_name}' "
+                    f"under '{topic_name}'."
+                )
+            else:
+                msg = (
+                    f"'{youtube_video_id}' is already on subtopic "
+                    f"'{target_subtopic_name}' under '{topic_name}'."
+                )
+            return {"ok": True, "message": msg, "stats": stats}
         raise ReviewUIError(f"Unsupported API route: {path}")
 
     def _generate_topic_suggestions(self, body: dict[str, Any]) -> dict[str, Any]:

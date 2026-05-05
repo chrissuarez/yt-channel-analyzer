@@ -1746,7 +1746,342 @@ class DiscoveryTopicSplitTests(unittest.TestCase):
     def test_ui_revision_advances_for_split(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("split", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryEpisodeMoveSubtopicTests(unittest.TestCase):
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_topic_with_two_subtopics(self, db_path: Path) -> dict[str, int]:
+        """Seed proj/Health with subtopics Sleep & Stress, vid1 in Sleep."""
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r1",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=0.7,
+                        reason="r2",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+        with connect(db_path) as conn:
+            health_id = conn.execute(
+                "SELECT id FROM topics WHERE name = 'Health'"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Sleep')",
+                (health_id,),
+            )
+            sleep_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            conn.execute(
+                "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Stress')",
+                (health_id,),
+            )
+            stress_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            vid1_id = conn.execute(
+                "SELECT id FROM videos WHERE youtube_video_id = 'vid1'"
+            ).fetchone()[0]
+            vid2_id = conn.execute(
+                "SELECT id FROM videos WHERE youtube_video_id = 'vid2'"
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO video_subtopics(video_id, subtopic_id, "
+                "assignment_source) VALUES (?, ?, 'auto')",
+                (vid1_id, sleep_id),
+            )
+            conn.commit()
+        return {
+            "health_id": health_id,
+            "sleep_id": sleep_id,
+            "stress_id": stress_id,
+            "vid1_id": vid1_id,
+            "vid2_id": vid2_id,
+        }
+
+    def test_move_episode_subtopic_repoints_existing_row(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            ids = self._seed_topic_with_two_subtopics(db_path)
+
+            stats = move_episode_subtopic(
+                db_path,
+                project_name="proj",
+                topic_name="Health",
+                youtube_video_id="vid1",
+                target_subtopic_name="Stress",
+            )
+            self.assertEqual(stats["moved"], 1)
+            self.assertEqual(stats["inserted"], 0)
+            self.assertEqual(stats["previous_subtopic_name"], "Sleep")
+            self.assertEqual(stats["target_subtopic_id"], ids["stress_id"])
+
+            with connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT video_id, subtopic_id FROM video_subtopics"
+                ).fetchall()
+            self.assertEqual(rows, [(ids["vid1_id"], ids["stress_id"])])
+
+    def test_move_episode_subtopic_inserts_when_no_existing_row(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            ids = self._seed_topic_with_two_subtopics(db_path)
+
+            stats = move_episode_subtopic(
+                db_path,
+                project_name="proj",
+                topic_name="Health",
+                youtube_video_id="vid2",
+                target_subtopic_name="Stress",
+            )
+            self.assertEqual(stats["moved"], 0)
+            self.assertEqual(stats["inserted"], 1)
+            self.assertIsNone(stats["previous_subtopic_name"])
+            self.assertEqual(stats["target_subtopic_id"], ids["stress_id"])
+
+            with connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT video_id, subtopic_id, assignment_source "
+                    "FROM video_subtopics ORDER BY video_id"
+                ).fetchall()
+            self.assertEqual(
+                rows,
+                [
+                    (ids["vid1_id"], ids["sleep_id"], "auto"),
+                    (ids["vid2_id"], ids["stress_id"], "manual"),
+                ],
+            )
+
+    def test_move_episode_subtopic_noop_when_already_on_target(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+
+            stats = move_episode_subtopic(
+                db_path,
+                project_name="proj",
+                topic_name="Health",
+                youtube_video_id="vid1",
+                target_subtopic_name="Sleep",
+            )
+            self.assertEqual(stats["moved"], 0)
+            self.assertEqual(stats["inserted"], 0)
+            self.assertEqual(stats["previous_subtopic_name"], "Sleep")
+
+    def test_move_episode_subtopic_rejects_target_under_other_topic(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            with connect(db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO topics(project_id, name)
+                    VALUES ((SELECT id FROM projects WHERE name = 'proj'), 'Business')
+                    """
+                )
+                business_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Founders')",
+                    (business_id,),
+                )
+                conn.commit()
+            with self.assertRaises(ValueError):
+                move_episode_subtopic(
+                    db_path,
+                    project_name="proj",
+                    topic_name="Health",
+                    youtube_video_id="vid1",
+                    target_subtopic_name="Founders",
+                )
+
+    def test_move_episode_subtopic_rejects_unknown_topic(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            with self.assertRaises(ValueError):
+                move_episode_subtopic(
+                    db_path,
+                    project_name="proj",
+                    topic_name="Nope",
+                    youtube_video_id="vid1",
+                    target_subtopic_name="Stress",
+                )
+
+    def test_move_episode_subtopic_rejects_unknown_subtopic(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            with self.assertRaises(ValueError):
+                move_episode_subtopic(
+                    db_path,
+                    project_name="proj",
+                    topic_name="Health",
+                    youtube_video_id="vid1",
+                    target_subtopic_name="Ghost",
+                )
+
+    def test_move_episode_subtopic_rejects_unknown_video(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            with self.assertRaises(ValueError):
+                move_episode_subtopic(
+                    db_path,
+                    project_name="proj",
+                    topic_name="Health",
+                    youtube_video_id="ghost",
+                    target_subtopic_name="Stress",
+                )
+
+    def test_move_episode_subtopic_rejects_video_not_on_topic(self) -> None:
+        from yt_channel_analyzer.db import move_episode_subtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            with connect(db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO topics(project_id, name)
+                    VALUES ((SELECT id FROM projects WHERE name = 'proj'), 'Business')
+                    """
+                )
+                business_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Founders')",
+                    (business_id,),
+                )
+                # Re-point vid2 from Health to Business so it is *not* on Health.
+                conn.execute(
+                    "UPDATE video_topics SET topic_id = ? "
+                    "WHERE video_id = (SELECT id FROM videos WHERE "
+                    "youtube_video_id = 'vid2')",
+                    (business_id,),
+                )
+                conn.commit()
+            with self.assertRaises(ValueError):
+                move_episode_subtopic(
+                    db_path,
+                    project_name="proj",
+                    topic_name="Health",
+                    youtube_video_id="vid2",
+                    target_subtopic_name="Stress",
+                )
+
+    def test_move_endpoint_moves_in_db(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            ids = self._seed_topic_with_two_subtopics(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/episode/move-subtopic",
+                body={
+                    "topic_name": "Health",
+                    "youtube_video_id": "vid1",
+                    "target_subtopic_name": "Stress",
+                },
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload.get("ok"))
+
+            with connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT video_id, subtopic_id FROM video_subtopics"
+                ).fetchall()
+            self.assertEqual(rows, [(ids["vid1_id"], ids["stress_id"])])
+
+    def test_move_endpoint_rejects_unknown_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_topic_with_two_subtopics(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/episode/move-subtopic",
+                body={
+                    "topic_name": "Nope",
+                    "youtube_video_id": "vid1",
+                    "target_subtopic_name": "Stress",
+                },
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", body.lower())
+
+    def test_html_page_defines_move_episode_subtopic_function(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function moveEpisodeSubtopic", html)
+        self.assertIn("/api/discovery/episode/move-subtopic", html)
+
+    def test_html_page_renders_move_button_per_subtopic_video(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("subtopic-video-move", html)
+
+    def test_ui_revision_advances_for_move(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("move", UI_REVISION)
 
 
 if __name__ == "__main__":
