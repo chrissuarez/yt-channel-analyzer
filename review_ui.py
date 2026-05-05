@@ -37,6 +37,7 @@ from yt_channel_analyzer.db import (
     reject_topic_suggestion_label,
     rename_comparison_group_suggestion_label,
     rename_subtopic_suggestion_label,
+    merge_topics,
     rename_topic,
     rename_topic_suggestion_label,
     store_video_comparison_group_suggestion,
@@ -52,7 +53,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.4-discovery-topic-rename"
+UI_REVISION = "2026-05-05.5-discovery-topic-merge"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -210,7 +211,13 @@ HTML_PAGE = """<!doctype html>
     .discovery-topic-header h3 {
       margin: 0;
     }
-    .discovery-topic-rename {
+    .discovery-topic-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .discovery-topic-rename,
+    .discovery-topic-merge {
       font-size: 12px;
       padding: 4px 8px;
       border-radius: 8px;
@@ -219,7 +226,8 @@ HTML_PAGE = """<!doctype html>
       color: var(--accent);
       cursor: pointer;
     }
-    .discovery-topic-rename:hover {
+    .discovery-topic-rename:hover,
+    .discovery-topic-merge:hover {
       background: rgba(125, 211, 252, 0.16);
     }
     .confidence-bar {
@@ -935,6 +943,35 @@ HTML_PAGE = """<!doctype html>
       renderDiscoveryTopicMap(lastDiscoveryTopicMap);
     }
 
+    async function mergeDiscoveryTopic(sourceName) {
+      const otherTopics = (lastDiscoveryTopicMap?.topics || [])
+        .map((t) => t.name)
+        .filter((n) => n !== sourceName);
+      if (!otherTopics.length) {
+        window.alert(`No other discovery topic to merge "${sourceName}" into.`);
+        return;
+      }
+      const proposed = window.prompt(
+        `Merge "${sourceName}" into which topic? Options: ${otherTopics.join(', ')}`,
+      );
+      if (proposed == null) return;
+      const targetName = proposed.trim();
+      if (!targetName || targetName === sourceName) return;
+      if (!otherTopics.includes(targetName)) {
+        window.alert(`"${targetName}" is not an existing discovery topic.`);
+        return;
+      }
+      if (!window.confirm(
+        `Merging "${sourceName}" into "${targetName}" will reassign its episodes and delete "${sourceName}". Continue?`,
+      )) return;
+      discoveryEpisodeSortByTopic.delete(sourceName);
+      await mutate(
+        '/api/discovery/topic/merge',
+        { source_name: sourceName, target_name: targetName },
+        `Merged discovery topic "${sourceName}" into "${targetName}".`,
+      );
+    }
+
     async function renameDiscoveryTopic(currentName) {
       const proposed = window.prompt(`Rename discovery topic "${currentName}" to:`, currentName);
       if (proposed == null) return;
@@ -996,10 +1033,16 @@ HTML_PAGE = """<!doctype html>
           <article class="topic-card discovery-topic-card">
             <div class="discovery-topic-header">
               <h3>${escapeHtml(topic.name)}</h3>
-              <button class="discovery-topic-rename"
-                      type="button"
-                      data-topic-name="${escapeHtml(topic.name)}"
-                      onclick="renameDiscoveryTopic(this.dataset.topicName)">Rename</button>
+              <div class="discovery-topic-actions">
+                <button class="discovery-topic-rename"
+                        type="button"
+                        data-topic-name="${escapeHtml(topic.name)}"
+                        onclick="renameDiscoveryTopic(this.dataset.topicName)">Rename</button>
+                <button class="discovery-topic-merge"
+                        type="button"
+                        data-topic-name="${escapeHtml(topic.name)}"
+                        onclick="mergeDiscoveryTopic(this.dataset.topicName)">Merge</button>
+              </div>
             </div>
             <div class="topic-stats">
               <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
@@ -2411,6 +2454,27 @@ class ReviewUIApp:
             return {
                 "ok": True,
                 "message": f"Renamed discovery topic '{current_name}' to '{new_name}' (row {topic_id}).",
+            }
+        if path == "/api/discovery/topic/merge":
+            source_name = self._require_text(body, "source_name")
+            target_name = self._require_text(body, "target_name")
+            project_name = _resolve_primary_project_name(self.db_path)
+            stats = merge_topics(
+                self.db_path,
+                project_name=project_name,
+                source_name=source_name,
+                target_name=target_name,
+            )
+            return {
+                "ok": True,
+                "message": (
+                    f"Merged discovery topic '{source_name}' into '{target_name}'. "
+                    f"Moved {stats['moved_episode_assignments']} episode assignment(s); "
+                    f"dropped {stats['dropped_episode_collisions']} duplicate(s); "
+                    f"moved {stats['moved_subtopics']} subtopic(s); "
+                    f"merged {stats['merged_subtopic_collisions']} colliding subtopic(s)."
+                ),
+                "stats": stats,
             }
         raise ReviewUIError(f"Unsupported API route: {path}")
 

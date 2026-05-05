@@ -27,6 +27,49 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 06 (partial) / Ralph iteration 9: discovery topic merge
+
+### Done (TDD, 11 new tests in `test_discovery.py`)
+- New `merge_topics(db_path, project_name, source_name, target_name)` in
+  `db.py`. Within a single transaction it: drops colliding source rows
+  in `video_topics` (target wins), re-points remaining rows to the
+  target, handles subtopic name collisions by re-pointing
+  `video_subtopics` then dropping the source subtopic, re-points
+  non-colliding subtopics, dedup-and-re-points
+  `subtopic_suggestion_labels`, and finally deletes the source topic.
+  Returns a stats dict: `moved_episode_assignments`,
+  `dropped_episode_collisions`, `moved_subtopics`,
+  `merged_subtopic_collisions`, `target_topic_id`.
+- New `/api/discovery/topic/merge` endpoint; returns success message
+  with stats. Rejects unknown source/target and same-name merges via
+  the existing 400-Bad-Request path.
+- UI: each discovery topic card now has a `Merge` button next to
+  `Rename`. JS prompt lists the other discovery topics and validates
+  the chosen target before calling the endpoint; confirm dialog before
+  destructive action; per-topic sort preference is dropped for the
+  source topic when its key disappears.
+- UI revision bumped to `2026-05-05.5-discovery-topic-merge`. Relaxed
+  the prior `test_ui_revision_advances_for_rename` to use the
+  `discovery` keyword like the other UI-revision tests, since pinning
+  to "rename" blocked every future iteration.
+
+### Learned
+- `video_topics` has a partial unique index for one-primary-per-video,
+  but it can't fire during a merge: a video already had at most one
+  primary topic before the merge, so re-pointing one source row to the
+  target either lands in a colliding-and-dropped slot (target wins) or
+  in a free slot (target inherits primary). No conflict.
+- Comparison groups CASCADE-delete when their parent subtopic is
+  dropped during a colliding-subtopic merge. Acceptable given Phase A4
+  plans to legacy-archive the comparison-group code; documented via
+  the merge-collision behavior rather than worked around.
+
+### Next
+- Split a topic, move an episode between subtopics, mark an assignment
+  as wrong. Then think about curation surviving a re-run.
+
+---
+
 ## 2026-05-05 — Slice 06 (partial) / Ralph iteration 8: discovery topic rename happy path
 
 ### Done (TDD, 7 new tests in `test_discovery.py`)

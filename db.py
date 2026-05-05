@@ -1731,6 +1731,116 @@ def rename_topic(
     return topic_row[0]
 
 
+def merge_topics(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    source_name: str,
+    target_name: str,
+) -> dict[str, int]:
+    """Merge ``source_name`` into ``target_name`` within the project.
+
+    Re-points all `video_topics`, `subtopics`, and `subtopic_suggestion_labels`
+    rows from the source topic to the target topic. On collision, target
+    wins: colliding source rows are dropped (so the target's existing
+    assignment_type / source / confidence / reason are preserved). The
+    source topic row is then deleted. Returns a stats dict.
+    """
+    if source_name == target_name:
+        raise ValueError("source and target must differ")
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.cursor()
+        rows = cursor.execute(
+            """
+            SELECT topics.id, topics.name
+            FROM topics
+            JOIN projects ON projects.id = topics.project_id
+            WHERE projects.name = ? AND topics.name IN (?, ?)
+            """,
+            (project_name, source_name, target_name),
+        ).fetchall()
+        by_name = {row[1]: row[0] for row in rows}
+        if source_name not in by_name:
+            raise ValueError(f"topic not found: {source_name}")
+        if target_name not in by_name:
+            raise ValueError(f"topic not found: {target_name}")
+        source_id = by_name[source_name]
+        target_id = by_name[target_name]
+
+        dropped_video_topics = cursor.execute(
+            """
+            DELETE FROM video_topics
+            WHERE topic_id = ?
+              AND video_id IN (SELECT video_id FROM video_topics WHERE topic_id = ?)
+            """,
+            (source_id, target_id),
+        ).rowcount
+        moved_video_topics = cursor.execute(
+            "UPDATE video_topics SET topic_id = ? WHERE topic_id = ?",
+            (target_id, source_id),
+        ).rowcount
+
+        merged_subtopics = 0
+        moved_subtopics = 0
+        # Find subtopic name collisions between the two topics.
+        collisions = cursor.execute(
+            """
+            SELECT s.id AS source_subtopic_id, t.id AS target_subtopic_id
+            FROM subtopics s
+            JOIN subtopics t ON t.topic_id = ? AND t.name = s.name
+            WHERE s.topic_id = ?
+            """,
+            (target_id, source_id),
+        ).fetchall()
+        for source_subtopic_id, target_subtopic_id in collisions:
+            cursor.execute(
+                """
+                DELETE FROM video_subtopics
+                WHERE subtopic_id = ?
+                  AND video_id IN (SELECT video_id FROM video_subtopics WHERE subtopic_id = ?)
+                """,
+                (source_subtopic_id, target_subtopic_id),
+            )
+            cursor.execute(
+                "UPDATE video_subtopics SET subtopic_id = ? WHERE subtopic_id = ?",
+                (target_subtopic_id, source_subtopic_id),
+            )
+            cursor.execute("DELETE FROM subtopics WHERE id = ?", (source_subtopic_id,))
+            merged_subtopics += 1
+        moved_subtopics = cursor.execute(
+            "UPDATE subtopics SET topic_id = ? WHERE topic_id = ?",
+            (target_id, source_id),
+        ).rowcount
+
+        cursor.execute(
+            """
+            DELETE FROM subtopic_suggestion_labels
+            WHERE topic_id = ?
+              AND (suggestion_run_id, name) IN (
+                  SELECT suggestion_run_id, name
+                  FROM subtopic_suggestion_labels
+                  WHERE topic_id = ?
+              )
+            """,
+            (source_id, target_id),
+        )
+        cursor.execute(
+            "UPDATE subtopic_suggestion_labels SET topic_id = ? WHERE topic_id = ?",
+            (target_id, source_id),
+        )
+
+        cursor.execute("DELETE FROM topics WHERE id = ?", (source_id,))
+        connection.commit()
+    return {
+        "target_topic_id": target_id,
+        "moved_episode_assignments": moved_video_topics,
+        "dropped_episode_collisions": dropped_video_topics,
+        "moved_subtopics": moved_subtopics,
+        "merged_subtopic_collisions": merged_subtopics,
+    }
+
+
 def assign_topic_to_video(
     db_path: str | Path,
     *,

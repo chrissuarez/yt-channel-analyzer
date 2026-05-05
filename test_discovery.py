@@ -1099,7 +1099,307 @@ class DiscoveryTopicRenameTests(unittest.TestCase):
     def test_ui_revision_advances_for_rename(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("rename", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryTopicMergeTests(unittest.TestCase):
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_two_topics(self, db_path: Path) -> None:
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def test_merge_topics_repoints_assignments_and_deletes_source(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+
+            stats = merge_topics(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                target_name="Business",
+            )
+            self.assertEqual(stats["moved_episode_assignments"], 1)
+            self.assertEqual(stats["dropped_episode_collisions"], 0)
+
+            with connect(db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM topics").fetchall()
+                }
+                self.assertEqual(names, {"Business"})
+
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id, t.name, vt.confidence, vt.reason
+                    FROM video_topics vt
+                    JOIN topics t ON t.id = vt.topic_id
+                    JOIN videos v ON v.id = vt.video_id
+                    ORDER BY v.youtube_video_id
+                    """
+                ).fetchall()
+            assignments = {(r[0], r[1]) for r in rows}
+            self.assertEqual(
+                assignments,
+                {("vid1", "Business"), ("vid2", "Business")},
+            )
+            vid1_row = next(r for r in rows if r[0] == "vid1")
+            self.assertAlmostEqual(vid1_row[2], 0.9)
+            self.assertEqual(vid1_row[3], "title mentions sleep")
+
+    def test_merge_topics_drops_colliding_source_row_keeping_target(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            # Both topics get vid1 — target's reason should win after merge.
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health", "Business"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="source reason",
+                        ),
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Business",
+                            confidence=0.4,
+                            reason="target reason",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            stats = merge_topics(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                target_name="Business",
+            )
+            self.assertEqual(stats["dropped_episode_collisions"], 1)
+            self.assertEqual(stats["moved_episode_assignments"], 0)
+
+            with connect(db_path) as conn:
+                row = conn.execute(
+                    """
+                    SELECT vt.confidence, vt.reason
+                    FROM video_topics vt
+                    JOIN topics t ON t.id = vt.topic_id
+                    JOIN videos v ON v.id = vt.video_id
+                    WHERE v.youtube_video_id = 'vid1' AND t.name = 'Business'
+                    """
+                ).fetchone()
+            self.assertAlmostEqual(row[0], 0.4)
+            self.assertEqual(row[1], "target reason")
+
+    def test_merge_topics_rejects_unknown_source(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+            with self.assertRaises(ValueError):
+                merge_topics(
+                    db_path,
+                    project_name="proj",
+                    source_name="Nope",
+                    target_name="Business",
+                )
+
+    def test_merge_topics_rejects_unknown_target(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+            with self.assertRaises(ValueError):
+                merge_topics(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    target_name="Nope",
+                )
+
+    def test_merge_topics_rejects_same_topic(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+            with self.assertRaises(ValueError):
+                merge_topics(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    target_name="Health",
+                )
+
+    def test_merge_topics_repoints_subtopics_and_handles_collisions(self) -> None:
+        from yt_channel_analyzer.db import merge_topics
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+            with connect(db_path) as conn:
+                source_id = conn.execute(
+                    "SELECT id FROM topics WHERE name = 'Health'"
+                ).fetchone()[0]
+                target_id = conn.execute(
+                    "SELECT id FROM topics WHERE name = 'Business'"
+                ).fetchone()[0]
+                # Source-only subtopic.
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Sleep')",
+                    (source_id,),
+                )
+                # Colliding subtopic on both topics.
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Habits')",
+                    (source_id,),
+                )
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Habits')",
+                    (target_id,),
+                )
+                conn.commit()
+
+            stats = merge_topics(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                target_name="Business",
+            )
+            self.assertEqual(stats["merged_subtopic_collisions"], 1)
+            self.assertEqual(stats["moved_subtopics"], 1)
+
+            with connect(db_path) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT s.name, t.name AS topic_name
+                    FROM subtopics s
+                    JOIN topics t ON t.id = s.topic_id
+                    ORDER BY s.name
+                    """
+                ).fetchall()
+            self.assertEqual(
+                [(r[0], r[1]) for r in rows],
+                [("Habits", "Business"), ("Sleep", "Business")],
+            )
+
+    def test_merge_endpoint_merges_topics_in_db(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/merge",
+                body={"source_name": "Health", "target_name": "Business"},
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload.get("ok"))
+
+            with connect(db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM topics").fetchall()
+                }
+            self.assertEqual(names, {"Business"})
+
+    def test_merge_endpoint_rejects_unknown_source(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_two_topics(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/merge",
+                body={"source_name": "Nope", "target_name": "Business"},
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", body.lower())
+
+    def test_html_page_defines_merge_discovery_topic_function(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function mergeDiscoveryTopic", html)
+        self.assertIn("/api/discovery/topic/merge", html)
+
+    def test_html_page_renders_merge_button_per_discovery_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-topic-merge", html)
+
+    def test_ui_revision_advances_for_merge(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("merge", UI_REVISION)
 
 
 if __name__ == "__main__":
