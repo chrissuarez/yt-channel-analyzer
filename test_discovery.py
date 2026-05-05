@@ -642,5 +642,130 @@ class AnalyzeCLITests(unittest.TestCase):
                 )
 
 
+class DiscoveryStatePayloadTests(unittest.TestCase):
+    def test_state_payload_has_no_discovery_topic_map_when_no_run(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = build_state_payload(db_path)
+            self.assertIn("discovery_topic_map", payload)
+            self.assertIsNone(payload["discovery_topic_map"])
+
+    def test_state_payload_discovery_topic_map_reflects_latest_run(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Business",
+                        confidence=0.4,
+                        reason="brain-as-startup metaphor",
+                    ),
+                ],
+            )
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            self.assertIsNotNone(topic_map)
+            self.assertEqual(topic_map["run_id"], run_id)
+            self.assertEqual(topic_map["model"], "stub")
+            self.assertEqual(topic_map["prompt_version"], "stub-v0")
+            self.assertEqual(topic_map["status"], "success")
+
+            topics_by_name = {t["name"]: t for t in topic_map["topics"]}
+            self.assertEqual(set(topics_by_name), {"Health", "Business"})
+            self.assertEqual(topics_by_name["Business"]["episode_count"], 2)
+            self.assertEqual(topics_by_name["Health"]["episode_count"], 1)
+            # Sort order: highest episode_count first.
+            self.assertEqual(topic_map["topics"][0]["name"], "Business")
+            self.assertAlmostEqual(topics_by_name["Health"]["avg_confidence"], 0.9)
+            self.assertAlmostEqual(topics_by_name["Business"]["avg_confidence"], 0.6)
+
+    def test_state_payload_discovery_topic_map_uses_only_latest_run(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            first_payload = DiscoveryPayload(
+                topics=["Old Topic"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Old Topic",
+                        confidence=0.5,
+                        reason="early run",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: first_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            second_payload = DiscoveryPayload(
+                topics=["Fresh Topic"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Fresh Topic",
+                        confidence=0.95,
+                        reason="latest run",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Fresh Topic",
+                        confidence=0.85,
+                        reason="latest run",
+                    ),
+                ],
+            )
+            second_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: second_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            self.assertEqual(topic_map["run_id"], second_run_id)
+            names = {t["name"] for t in topic_map["topics"]}
+            self.assertEqual(names, {"Fresh Topic"})
+
+
 if __name__ == "__main__":
     unittest.main()

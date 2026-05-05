@@ -1568,6 +1568,55 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
     }
 
 
+def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        run_row = connection.execute(
+            """
+            SELECT id, model, prompt_version, status, created_at
+            FROM discovery_runs
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if run_row is None:
+            return None
+
+        topic_rows = connection.execute(
+            """
+            SELECT topics.name AS topic_name,
+                   COUNT(DISTINCT video_topics.video_id) AS episode_count,
+                   AVG(video_topics.confidence) AS avg_confidence
+            FROM video_topics
+            JOIN topics ON topics.id = video_topics.topic_id
+            WHERE video_topics.discovery_run_id = ?
+            GROUP BY topics.id, topics.name
+            ORDER BY episode_count DESC, topics.name COLLATE NOCASE
+            """,
+            (run_row["id"],),
+        ).fetchall()
+
+    return {
+        "run_id": int(run_row["id"]),
+        "model": run_row["model"],
+        "prompt_version": run_row["prompt_version"],
+        "status": run_row["status"],
+        "created_at": run_row["created_at"],
+        "topics": [
+            {
+                "name": row["topic_name"],
+                "episode_count": int(row["episode_count"]),
+                "avg_confidence": (
+                    float(row["avg_confidence"])
+                    if row["avg_confidence"] is not None
+                    else None
+                ),
+            }
+            for row in topic_rows
+        ],
+    }
+
+
 def build_state_payload(
     db_path: str | Path,
     *,
@@ -1771,6 +1820,7 @@ def build_state_payload(
         ),
     )
     topic_inventory = _build_topic_inventory(db_path, topic_name=selected_topic)
+    discovery_topic_map = _build_discovery_topic_map(db_path)
 
     return {
         "db_path": str(db_path),
@@ -1784,6 +1834,7 @@ def build_state_payload(
         "current_run": current_run,
         "topic_map": topic_map,
         "topic_inventory": topic_inventory,
+        "discovery_topic_map": discovery_topic_map,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),
             "summary": topic_summary,
