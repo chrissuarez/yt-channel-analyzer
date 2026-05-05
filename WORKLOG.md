@@ -27,6 +27,37 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 4: GUI discovery topic-map payload
+
+### Done (TDD, 3 new tests in `test_discovery.py`)
+- Added `_build_discovery_topic_map(db_path)` helper to `review_ui.py`.
+  Reads the latest `discovery_runs` row, then aggregates
+  `COUNT(DISTINCT video_id)` and `AVG(confidence)` per topic via the
+  `video_topics.discovery_run_id` FK. Sorted by descending
+  `episode_count`, then topic name (NOCASE).
+- Wired the new payload into `build_state_payload()` under the
+  `discovery_topic_map` key. Returns `None` when no discovery run
+  exists; otherwise `{run_id, model, prompt_version, status, created_at,
+  topics: [{name, episode_count, avg_confidence}, ...]}`.
+- Existing pre-pivot `topic_map` (built from the old topic-suggestion
+  flow) is unchanged and lives alongside the new key. The GUI HTML
+  hasn't been touched yet — that's the next iteration's job.
+- New `DiscoveryStatePayloadTests` class with three tests: empty case,
+  happy path with two topics + 3 assignments, and latest-run isolation
+  (older run ignored after a second run is recorded).
+- All 15 tests in `test_discovery.py` pass. The 2 pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` are unchanged.
+
+### Next session — Ralph iteration 5
+1. Render `discovery_topic_map` in the GUI HTML/JS — a panel above the
+   pre-pivot Topic Map showing the auto-discovered topics with episode
+   counts and confidence indicators (PRD §A3 first bullet).
+2. Remove comparison-group panels from primary GUI nav.
+3. Move comparison-group code to `legacy/` with deprecation-warning
+   import shims.
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 3: CLI `analyze` chain
 
 ### Done (TDD, 2 new tests in `test_discovery.py`)

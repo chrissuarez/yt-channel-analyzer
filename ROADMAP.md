@@ -75,7 +75,8 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] CLI: `analyze --db-path --project-name --channel-input --stub` chains channel resolve → metadata upsert → videos fetch+upsert → `run_discovery(stub_llm)` (Ralph iteration 3, commit `cc70ccd`)
 
 #### A3. Topic map UI (extend `review_ui.py`)
-- [ ] Render auto-discovered topic map: topics with episode counts, subtopic counts, average confidence
+- [x] `/api/state` payload: `discovery_topic_map` key surfaces latest run's topics with episode count + average confidence (Ralph iteration 4, commit `89437b7`)
+- [ ] Render auto-discovered topic map in HTML/JS: topics with episode counts, subtopic counts, average confidence
 - [ ] Topic detail: subtopics + episodes assigned to each
 - [ ] Per-episode card: title, thumbnail, guest, "why this episode is here" reason, confidence indicator (e.g. faded/muted styling for low confidence)
 - [ ] Episodes appear under every topic they belong to (multi-topic display)
