@@ -27,6 +27,43 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 5: GUI discovery topic-map panel
+
+### Done (TDD, 3 new tests in `test_discovery.py`)
+- New `DiscoveryTopicMapHTMLTests` class. Tests assert that the rendered
+  HTML page exposes `id="discovery-topic-map-grid"`, the heading
+  "Auto-Discovered Topics", a `function renderDiscoveryTopicMap` JS
+  definition, the call site `renderDiscoveryTopicMap(payload.discovery_topic_map)`
+  inside `render()`, and that `UI_REVISION` includes `"discovery-topic-map"`.
+- Added a new `<section class="topic-map discovery-topic-map">` above the
+  existing pre-pivot Topic Map. Contains a `discovery-topic-map-meta`
+  paragraph (run id / model / prompt version / status / created_at) and
+  a `discovery-topic-map-grid` that holds the rendered topic cards.
+- Added `renderDiscoveryTopicMap(map)` in the JS layer. Renders an empty
+  state when the payload is null, a per-topic card grid otherwise.
+  Each card shows topic name, episode count, average confidence as a
+  percentage, and a colour-graded confidence bar (green ≥ 0.66, amber
+  ≥ 0.33, red below). Wired into `render()` between `renderContext` and
+  `renderTopicMap`.
+- Added matching CSS: `.topic-map.discovery-topic-map` (green-tinted
+  variant of the pre-pivot panel) and `.confidence-bar` with `.low` /
+  `.very-low` modifiers.
+- Bumped `UI_REVISION` to `2026-05-05.1-discovery-topic-map`.
+- All 18 tests in `test_discovery.py` pass. Two pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` unchanged.
+- Sanity: extracted `<script>` body and `node --check` parses cleanly.
+
+### Next session — Ralph iteration 6
+1. Topic detail in the discovery panel: episode list per topic with
+   "why this episode is here" reason + confidence indicator (PRD §A3
+   second/third bullets).
+2. Curation actions on auto-discovered topics: rename, merge, split,
+   move episode, mark assignment wrong.
+3. Remove comparison-group panels from primary GUI nav.
+4. Move comparison-group code to `legacy/` with deprecation shims.
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 4: GUI discovery topic-map payload
 
 ### Done (TDD, 3 new tests in `test_discovery.py`)

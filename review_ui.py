@@ -51,7 +51,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-04-25.10-subtopic-readiness"
+UI_REVISION = "2026-05-05.1-discovery-topic-map"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -194,6 +194,30 @@ HTML_PAGE = """<!doctype html>
         rgba(20, 27, 45, 0.78);
       box-shadow: 0 18px 45px rgba(0, 0, 0, 0.22);
     }
+    .topic-map.discovery-topic-map {
+      border-color: rgba(134, 239, 172, 0.22);
+      background:
+        radial-gradient(circle at top left, rgba(134, 239, 172, 0.10), transparent 32%),
+        rgba(20, 27, 45, 0.78);
+    }
+    .confidence-bar {
+      position: relative;
+      height: 6px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .confidence-bar > span {
+      position: absolute;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      background: linear-gradient(90deg, rgba(134, 239, 172, 0.6), rgba(125, 211, 252, 0.7));
+      border-radius: 999px;
+    }
+    .confidence-bar.low > span { background: rgba(251, 191, 36, 0.6); }
+    .confidence-bar.very-low > span { background: rgba(252, 165, 165, 0.6); }
     .topic-map-head {
       display: flex;
       justify-content: space-between;
@@ -564,6 +588,17 @@ HTML_PAGE = """<!doctype html>
       <div class="status" id="status-box">Loading channel data… If this does not change, the page hit a client-side render error.</div>
     </section>
 
+    <section class="topic-map discovery-topic-map">
+      <div class="topic-map-head">
+        <div>
+          <h2>Auto-Discovered Topics</h2>
+          <div class="muted">Latest discovery run. Episode counts and confidence come straight from the model — curate from here.</div>
+        </div>
+        <div id="discovery-topic-map-meta" class="muted"></div>
+      </div>
+      <div id="discovery-topic-map-grid" class="topic-map-grid"></div>
+    </section>
+
     <section class="topic-map">
       <div class="topic-map-head">
         <div>
@@ -766,6 +801,40 @@ HTML_PAGE = """<!doctype html>
       if (status === 'ready_to_explore') return '<span class="status-chip good">Ready to explore</span>';
       if (status === 'suggested') return '<span class="status-chip accent">Suggested</span>';
       return '<span class="status-chip">No current suggestions</span>';
+    }
+
+    function renderDiscoveryTopicMap(map) {
+      const grid = document.getElementById('discovery-topic-map-grid');
+      const meta = document.getElementById('discovery-topic-map-meta');
+      if (!map) {
+        grid.innerHTML = '<div class="empty">No discovery run yet. Run <code>analyze --stub</code> or <code>discover --stub</code> to populate this panel.</div>';
+        meta.textContent = '';
+        return;
+      }
+      meta.textContent = `Run #${map.run_id} · ${map.model} · ${map.prompt_version} · ${map.status} · ${map.created_at}`;
+      const topics = map.topics || [];
+      if (!topics.length) {
+        grid.innerHTML = '<div class="empty">Latest discovery run produced no topic assignments.</div>';
+        return;
+      }
+      grid.innerHTML = topics.map((topic) => {
+        const confidence = (topic.avg_confidence == null) ? null : Math.max(0, Math.min(1, topic.avg_confidence));
+        const pct = (confidence == null) ? '—' : `${Math.round(confidence * 100)}%`;
+        const barClass = (confidence == null || confidence >= 0.66)
+          ? ''
+          : (confidence >= 0.33 ? 'low' : 'very-low');
+        const barWidth = (confidence == null) ? 0 : Math.round(confidence * 100);
+        return `
+          <article class="topic-card">
+            <h3>${escapeHtml(topic.name)}</h3>
+            <div class="topic-stats">
+              <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
+              <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
+            </div>
+            <div class="confidence-bar ${barClass}"><span style="width:${barWidth}%"></span></div>
+          </article>
+        `;
+      }).join('');
     }
 
     function renderTopicMap(items) {
@@ -1088,6 +1157,7 @@ HTML_PAGE = """<!doctype html>
       renderSelect('topic-select', payload.subtopic_reviews.available_topics.map((name) => ({ name })), payload.subtopic_reviews.selected_topic, (item) => item.name, (item) => item.name);
       renderSelect('subtopic-select', payload.comparison_reviews.available_subtopics.map((name) => ({ name })), payload.comparison_reviews.selected_subtopic, (item) => item.name, (item) => item.name);
       renderContext(payload);
+      renderDiscoveryTopicMap(payload.discovery_topic_map);
       renderTopicMap(payload.topic_map);
       renderSelectedTopicDetail(payload);
       renderSummary('topic-metrics', payload.topic_reviews.summary);

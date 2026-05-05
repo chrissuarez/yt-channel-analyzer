@@ -767,5 +767,28 @@ class DiscoveryStatePayloadTests(unittest.TestCase):
             self.assertEqual(names, {"Fresh Topic"})
 
 
+class DiscoveryTopicMapHTMLTests(unittest.TestCase):
+    def test_html_page_contains_discovery_topic_map_section(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn('id="discovery-topic-map-grid"', html)
+        self.assertIn("Auto-Discovered Topics", html)
+
+    def test_html_page_wires_render_discovery_topic_map(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function renderDiscoveryTopicMap", html)
+        self.assertIn(
+            "renderDiscoveryTopicMap(payload.discovery_topic_map)", html
+        )
+
+    def test_ui_revision_advances_for_discovery_topic_map_panel(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("discovery-topic-map", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()
