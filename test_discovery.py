@@ -1399,7 +1399,354 @@ class DiscoveryTopicMergeTests(unittest.TestCase):
     def test_ui_revision_advances_for_merge(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION
 
-        self.assertIn("merge", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
+class DiscoveryTopicSplitTests(unittest.TestCase):
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_one_topic_two_videos(self, db_path: Path) -> None:
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=0.6,
+                        reason="metaphorical health",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def test_split_topic_creates_new_topic_and_moves_selected_episodes(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+
+            stats = split_topic(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                new_name="Sleep",
+                youtube_video_ids=["vid1"],
+            )
+            self.assertEqual(stats["moved_episode_assignments"], 1)
+            self.assertEqual(stats["dropped_subtopic_assignments"], 0)
+            self.assertEqual(stats["skipped_video_ids"], [])
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                names = {
+                    row["name"]
+                    for row in conn.execute("SELECT name FROM topics").fetchall()
+                }
+                self.assertEqual(names, {"Health", "Sleep"})
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id, t.name AS topic_name,
+                           vt.confidence, vt.reason, vt.assignment_source
+                    FROM video_topics vt
+                    JOIN topics t ON t.id = vt.topic_id
+                    JOIN videos v ON v.id = vt.video_id
+                    ORDER BY t.name, v.youtube_video_id
+                    """
+                ).fetchall()
+            assignments = {(r["youtube_video_id"], r["topic_name"]) for r in rows}
+            self.assertEqual(
+                assignments, {("vid2", "Health"), ("vid1", "Sleep")}
+            )
+            sleep_row = next(r for r in rows if r["topic_name"] == "Sleep")
+            # Per-row provenance preserved during the move.
+            self.assertAlmostEqual(sleep_row["confidence"], 0.9)
+            self.assertEqual(sleep_row["reason"], "title mentions sleep")
+            self.assertEqual(sleep_row["assignment_source"], "auto")
+
+    def test_split_topic_drops_orphan_subtopic_rows_for_moved_videos(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            with connect(db_path) as conn:
+                source_id = conn.execute(
+                    "SELECT id FROM topics WHERE name = 'Health'"
+                ).fetchone()[0]
+                vid1_id = conn.execute(
+                    "SELECT id FROM videos WHERE youtube_video_id = 'vid1'"
+                ).fetchone()[0]
+                vid2_id = conn.execute(
+                    "SELECT id FROM videos WHERE youtube_video_id = 'vid2'"
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Routines')",
+                    (source_id,),
+                )
+                sub_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO video_subtopics(video_id, subtopic_id, "
+                    "assignment_source) VALUES (?, ?, 'auto')",
+                    (vid1_id, sub_id),
+                )
+                conn.execute(
+                    "INSERT INTO video_subtopics(video_id, subtopic_id, "
+                    "assignment_source) VALUES (?, ?, 'auto')",
+                    (vid2_id, sub_id),
+                )
+                conn.commit()
+
+            stats = split_topic(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                new_name="Sleep",
+                youtube_video_ids=["vid1"],
+            )
+            self.assertEqual(stats["dropped_subtopic_assignments"], 1)
+
+            with connect(db_path) as conn:
+                rows = conn.execute(
+                    "SELECT video_id FROM video_subtopics"
+                ).fetchall()
+            self.assertEqual({r[0] for r in rows}, {vid2_id})
+
+    def test_split_topic_reports_skipped_video_ids(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+
+            stats = split_topic(
+                db_path,
+                project_name="proj",
+                source_name="Health",
+                new_name="Sleep",
+                youtube_video_ids=["vid1", "ghost"],
+            )
+            self.assertEqual(stats["moved_episode_assignments"], 1)
+            self.assertEqual(stats["skipped_video_ids"], ["ghost"])
+
+    def test_split_topic_rejects_existing_new_name(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health", "Business"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="r",
+                        ),
+                        DiscoveryAssignment(
+                            youtube_video_id="vid2",
+                            topic_name="Business",
+                            confidence=0.8,
+                            reason="r",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            with self.assertRaises(ValueError):
+                split_topic(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    new_name="Business",
+                    youtube_video_ids=["vid1"],
+                )
+
+    def test_split_topic_rejects_unknown_source(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            with self.assertRaises(ValueError):
+                split_topic(
+                    db_path,
+                    project_name="proj",
+                    source_name="Nope",
+                    new_name="Sleep",
+                    youtube_video_ids=["vid1"],
+                )
+
+    def test_split_topic_rejects_same_source_and_new_name(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            with self.assertRaises(ValueError):
+                split_topic(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    new_name="Health",
+                    youtube_video_ids=["vid1"],
+                )
+
+    def test_split_topic_rejects_when_no_supplied_video_is_in_source(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            with self.assertRaises(ValueError):
+                split_topic(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    new_name="Sleep",
+                    youtube_video_ids=["ghost"],
+                )
+
+    def test_split_topic_requires_video_ids(self) -> None:
+        from yt_channel_analyzer.db import split_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            with self.assertRaises(ValueError):
+                split_topic(
+                    db_path,
+                    project_name="proj",
+                    source_name="Health",
+                    new_name="Sleep",
+                    youtube_video_ids=[],
+                )
+
+    def test_split_endpoint_splits_topic_in_db(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/split",
+                body={
+                    "source_name": "Health",
+                    "new_name": "Sleep",
+                    "youtube_video_ids": ["vid1"],
+                },
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload.get("ok"))
+
+            with connect(db_path) as conn:
+                names = {
+                    row[0]
+                    for row in conn.execute("SELECT name FROM topics").fetchall()
+                }
+            self.assertEqual(names, {"Health", "Sleep"})
+
+    def test_split_endpoint_rejects_unknown_source(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/split",
+                body={
+                    "source_name": "Nope",
+                    "new_name": "Sleep",
+                    "youtube_video_ids": ["vid1"],
+                },
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", body.lower())
+
+    def test_split_endpoint_rejects_empty_video_ids(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_one_topic_two_videos(db_path)
+            app = ReviewUIApp(db_path)
+            status, _body = self._call_app(
+                app,
+                "POST",
+                "/api/discovery/topic/split",
+                body={
+                    "source_name": "Health",
+                    "new_name": "Sleep",
+                    "youtube_video_ids": [],
+                },
+            )
+            self.assertEqual(status, "400 Bad Request")
+
+    def test_html_page_defines_split_discovery_topic_function(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function splitDiscoveryTopic", html)
+        self.assertIn("/api/discovery/topic/split", html)
+
+    def test_html_page_renders_split_button_per_discovery_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-topic-split", html)
+
+    def test_ui_revision_advances_for_split(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("split", UI_REVISION)
 
 
 if __name__ == "__main__":

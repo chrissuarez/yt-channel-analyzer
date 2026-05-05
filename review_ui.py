@@ -39,6 +39,7 @@ from yt_channel_analyzer.db import (
     rename_subtopic_suggestion_label,
     merge_topics,
     rename_topic,
+    split_topic,
     rename_topic_suggestion_label,
     store_video_comparison_group_suggestion,
     store_video_subtopic_suggestion,
@@ -53,7 +54,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.5-discovery-topic-merge"
+UI_REVISION = "2026-05-05.6-discovery-topic-split"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -217,7 +218,8 @@ HTML_PAGE = """<!doctype html>
       flex-wrap: wrap;
     }
     .discovery-topic-rename,
-    .discovery-topic-merge {
+    .discovery-topic-merge,
+    .discovery-topic-split {
       font-size: 12px;
       padding: 4px 8px;
       border-radius: 8px;
@@ -227,7 +229,8 @@ HTML_PAGE = """<!doctype html>
       cursor: pointer;
     }
     .discovery-topic-rename:hover,
-    .discovery-topic-merge:hover {
+    .discovery-topic-merge:hover,
+    .discovery-topic-split:hover {
       background: rgba(125, 211, 252, 0.16);
     }
     .confidence-bar {
@@ -943,6 +946,54 @@ HTML_PAGE = """<!doctype html>
       renderDiscoveryTopicMap(lastDiscoveryTopicMap);
     }
 
+    async function splitDiscoveryTopic(sourceName) {
+      const topic = (lastDiscoveryTopicMap?.topics || []).find((t) => t.name === sourceName);
+      if (!topic || !topic.episodes || !topic.episodes.length) {
+        window.alert(`No episodes available to split off from "${sourceName}".`);
+        return;
+      }
+      const existingNames = new Set((lastDiscoveryTopicMap?.topics || []).map((t) => t.name));
+      const proposedName = window.prompt(
+        `Split episodes off "${sourceName}" into a NEW topic. New topic name:`,
+      );
+      if (proposedName == null) return;
+      const newName = proposedName.trim();
+      if (!newName || newName === sourceName) return;
+      if (existingNames.has(newName)) {
+        window.alert(`"${newName}" already exists. Use Merge to combine, or pick a different name.`);
+        return;
+      }
+      const list = topic.episodes
+        .map((e, i) => `${i + 1}. ${e.title || '(untitled)'} [${e.youtube_video_id}]`)
+        .join('\n');
+      const selectionRaw = window.prompt(
+        `Which episodes go to "${newName}"? Enter indices comma-separated (e.g. 1,3,5).\n\n${list}`,
+      );
+      if (selectionRaw == null) return;
+      const indices = selectionRaw
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10) - 1)
+        .filter((i) => Number.isInteger(i) && i >= 0 && i < topic.episodes.length);
+      const uniqueIndices = Array.from(new Set(indices));
+      if (!uniqueIndices.length) {
+        window.alert('No valid episode indices selected.');
+        return;
+      }
+      if (uniqueIndices.length === topic.episodes.length) {
+        window.alert(`Selecting every episode would empty "${sourceName}". Use Rename instead.`);
+        return;
+      }
+      const ids = uniqueIndices.map((i) => topic.episodes[i].youtube_video_id);
+      if (!window.confirm(
+        `Move ${ids.length} episode(s) from "${sourceName}" to new topic "${newName}"?`,
+      )) return;
+      await mutate(
+        '/api/discovery/topic/split',
+        { source_name: sourceName, new_name: newName, youtube_video_ids: ids },
+        `Split ${ids.length} episode(s) from "${sourceName}" into "${newName}".`,
+      );
+    }
+
     async function mergeDiscoveryTopic(sourceName) {
       const otherTopics = (lastDiscoveryTopicMap?.topics || [])
         .map((t) => t.name)
@@ -1042,6 +1093,10 @@ HTML_PAGE = """<!doctype html>
                         type="button"
                         data-topic-name="${escapeHtml(topic.name)}"
                         onclick="mergeDiscoveryTopic(this.dataset.topicName)">Merge</button>
+                <button class="discovery-topic-split"
+                        type="button"
+                        data-topic-name="${escapeHtml(topic.name)}"
+                        onclick="splitDiscoveryTopic(this.dataset.topicName)">Split</button>
               </div>
             </div>
             <div class="topic-stats">
@@ -2473,6 +2528,40 @@ class ReviewUIApp:
                     f"dropped {stats['dropped_episode_collisions']} duplicate(s); "
                     f"moved {stats['moved_subtopics']} subtopic(s); "
                     f"merged {stats['merged_subtopic_collisions']} colliding subtopic(s)."
+                ),
+                "stats": stats,
+            }
+        if path == "/api/discovery/topic/split":
+            source_name = self._require_text(body, "source_name")
+            new_name = self._require_text(body, "new_name")
+            youtube_video_ids = body.get("youtube_video_ids")
+            if not isinstance(youtube_video_ids, list) or not all(
+                isinstance(v, str) and v.strip() for v in youtube_video_ids
+            ):
+                raise ReviewUIError(
+                    "youtube_video_ids must be a non-empty list of strings."
+                )
+            project_name = _resolve_primary_project_name(self.db_path)
+            stats = split_topic(
+                self.db_path,
+                project_name=project_name,
+                source_name=source_name,
+                new_name=new_name,
+                youtube_video_ids=[v.strip() for v in youtube_video_ids],
+            )
+            skipped = stats.get("skipped_video_ids") or []
+            skipped_note = (
+                f" Skipped {len(skipped)} video id(s) not on '{source_name}'."
+                if skipped
+                else ""
+            )
+            return {
+                "ok": True,
+                "message": (
+                    f"Split discovery topic '{source_name}' into '{new_name}'. "
+                    f"Moved {stats['moved_episode_assignments']} episode assignment(s); "
+                    f"dropped {stats['dropped_subtopic_assignments']} subtopic assignment(s)."
+                    f"{skipped_note}"
                 ),
                 "stats": stats,
             }

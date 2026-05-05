@@ -1841,6 +1841,102 @@ def merge_topics(
     }
 
 
+def split_topic(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    source_name: str,
+    new_name: str,
+    youtube_video_ids: list[str],
+) -> dict[str, int | list[str]]:
+    """Split selected episodes off ``source_name`` into a new topic ``new_name``.
+
+    Creates ``new_name`` as a fresh topic in the project, then re-points each
+    selected `video_topics` row from the source topic to the new topic. Video
+    IDs that are unknown or not currently assigned to the source topic are
+    skipped and reported in the ``skipped_video_ids`` stat. Any
+    `video_subtopics` rows belonging to subtopics under the source topic for
+    moved videos are dropped (the new topic has no subtopics yet, so leaving
+    them attached to the source's subtopics would orphan them visually).
+    """
+    if source_name == new_name:
+        raise ValueError("source and new name must differ")
+    if not youtube_video_ids:
+        raise ValueError("youtube_video_ids must not be empty")
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.cursor()
+        project_row = cursor.execute(
+            "SELECT id FROM projects WHERE name = ? ORDER BY id LIMIT 1",
+            (project_name,),
+        ).fetchone()
+        if project_row is None:
+            raise ValueError(f"project not found: {project_name}")
+        project_id = project_row[0]
+        source_row = cursor.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, source_name),
+        ).fetchone()
+        if source_row is None:
+            raise ValueError(f"topic not found: {source_name}")
+        source_id = source_row[0]
+        existing_new = cursor.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, new_name),
+        ).fetchone()
+        if existing_new is not None:
+            raise ValueError(f"topic already exists: {new_name}")
+
+        placeholders = ",".join("?" for _ in youtube_video_ids)
+        eligible = cursor.execute(
+            f"""
+            SELECT v.id, v.youtube_video_id
+            FROM videos v
+            JOIN video_topics vt ON vt.video_id = v.id
+            WHERE vt.topic_id = ? AND v.youtube_video_id IN ({placeholders})
+            """,
+            (source_id, *youtube_video_ids),
+        ).fetchall()
+        eligible_internal_ids = [row[0] for row in eligible]
+        eligible_youtube_ids = {row[1] for row in eligible}
+        skipped = [yid for yid in youtube_video_ids if yid not in eligible_youtube_ids]
+        if not eligible_internal_ids:
+            raise ValueError(
+                f"none of the supplied videos are assigned to '{source_name}'"
+            )
+
+        cursor.execute(
+            "INSERT INTO topics(project_id, name) VALUES (?, ?)",
+            (project_id, new_name),
+        )
+        new_topic_id = cursor.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        eligible_placeholders = ",".join("?" for _ in eligible_internal_ids)
+        moved = cursor.execute(
+            f"""
+            UPDATE video_topics SET topic_id = ?
+            WHERE topic_id = ? AND video_id IN ({eligible_placeholders})
+            """,
+            (new_topic_id, source_id, *eligible_internal_ids),
+        ).rowcount
+        dropped_subtopics = cursor.execute(
+            f"""
+            DELETE FROM video_subtopics
+            WHERE video_id IN ({eligible_placeholders})
+              AND subtopic_id IN (SELECT id FROM subtopics WHERE topic_id = ?)
+            """,
+            (*eligible_internal_ids, source_id),
+        ).rowcount
+
+        connection.commit()
+    return {
+        "new_topic_id": new_topic_id,
+        "moved_episode_assignments": moved,
+        "dropped_subtopic_assignments": dropped_subtopics,
+        "skipped_video_ids": skipped,
+    }
+
+
 def assign_topic_to_video(
     db_path: str | Path,
     *,
