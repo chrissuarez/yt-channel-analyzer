@@ -19,7 +19,7 @@ from yt_channel_analyzer.discovery import (
     run_discovery,
     stub_llm,
 )
-from yt_channel_analyzer.youtube import VideoMetadata
+from yt_channel_analyzer.youtube import ChannelMetadata, VideoMetadata
 
 
 def _seed_channel_with_videos(db_path: Path) -> None:
@@ -517,6 +517,127 @@ class DiscoverCLITests(unittest.TestCase):
                         str(db_path),
                         "--project-name",
                         "proj",
+                    ]
+                )
+
+
+class AnalyzeCLITests(unittest.TestCase):
+    def _patch_youtube(self) -> None:
+        cli.resolve_canonical_channel_id = lambda channel_input: "UC_resolved"
+        cli.fetch_channel_metadata = lambda channel_id: ChannelMetadata(
+            youtube_channel_id="UC_resolved",
+            title="Diary of a CEO",
+            description="A podcast",
+            custom_url="@doac",
+            published_at="2017-01-01T00:00:00Z",
+            thumbnail_url=None,
+        )
+        cli.fetch_channel_videos = lambda youtube_channel_id, *, limit: [
+            VideoMetadata(
+                youtube_video_id="vid_a",
+                title="Episode A",
+                description=None,
+                published_at="2026-04-01T00:00:00Z",
+                thumbnail_url=None,
+            ),
+            VideoMetadata(
+                youtube_video_id="vid_b",
+                title="Episode B",
+                description=None,
+                published_at="2026-04-02T00:00:00Z",
+                thumbnail_url=None,
+            ),
+        ]
+
+    def setUp(self) -> None:
+        from yt_channel_analyzer import youtube
+        self._original = (
+            cli.resolve_canonical_channel_id,
+            cli.fetch_channel_metadata,
+            cli.fetch_channel_videos,
+        )
+        self._youtube = youtube
+
+    def tearDown(self) -> None:
+        (
+            cli.resolve_canonical_channel_id,
+            cli.fetch_channel_metadata,
+            cli.fetch_channel_videos,
+        ) = self._original
+
+    def test_analyze_chains_setup_ingest_and_discover(self) -> None:
+        self._patch_youtube()
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            exit_code = cli.main(
+                [
+                    "analyze",
+                    "--db-path",
+                    str(db_path),
+                    "--project-name",
+                    "doac",
+                    "--channel-input",
+                    "@doac",
+                    "--stub",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                project = conn.execute(
+                    "SELECT id, name FROM projects WHERE name = 'doac'"
+                ).fetchone()
+                self.assertIsNotNone(project)
+
+                channel = conn.execute(
+                    "SELECT id, youtube_channel_id, is_primary "
+                    "FROM channels WHERE project_id = ?",
+                    (project["id"],),
+                ).fetchone()
+                self.assertEqual(channel["youtube_channel_id"], "UC_resolved")
+                self.assertEqual(channel["is_primary"], 1)
+
+                videos = conn.execute(
+                    "SELECT youtube_video_id FROM videos WHERE channel_id = ? "
+                    "ORDER BY youtube_video_id",
+                    (channel["id"],),
+                ).fetchall()
+                self.assertEqual(
+                    [v["youtube_video_id"] for v in videos],
+                    ["vid_a", "vid_b"],
+                )
+
+                runs = conn.execute(
+                    "SELECT id, model, status FROM discovery_runs"
+                ).fetchall()
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0]["model"], "stub")
+                self.assertEqual(runs[0]["status"], "success")
+
+                assignments = conn.execute(
+                    "SELECT assignment_source FROM video_topics "
+                    "WHERE discovery_run_id = ?",
+                    (runs[0]["id"],),
+                ).fetchall()
+                self.assertEqual(len(assignments), 2)
+                for row in assignments:
+                    self.assertEqual(row["assignment_source"], "auto")
+
+    def test_analyze_requires_stub_flag(self) -> None:
+        self._patch_youtube()
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            with self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "analyze",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "doac",
+                        "--channel-input",
+                        "@doac",
                     ]
                 )
 

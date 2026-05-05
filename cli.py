@@ -794,6 +794,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use a hardcoded fake LLM payload (no API call). Required until real LLM lands.",
     )
 
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="End-to-end: resolve channel, ingest channel + video metadata, run discovery.",
+    )
+    analyze_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
+    analyze_parser.add_argument("--project-name", required=True, help="Human-readable project name.")
+    analyze_parser.add_argument(
+        "--channel-input",
+        required=True,
+        help="One YouTube channel input: channel ID, handle, or supported URL.",
+    )
+    analyze_parser.add_argument(
+        "--limit",
+        type=int,
+        default=25,
+        help="Conservative maximum number of uploaded videos to fetch.",
+    )
+    analyze_parser.add_argument(
+        "--stub",
+        action="store_true",
+        help="Use a hardcoded fake LLM payload (no API call). Required until real LLM lands.",
+    )
+
     serve_review_ui_parser = subparsers.add_parser(
         "serve-review-ui",
         help="Run a lightweight local web UI for reviewing and applying suggestion labels.",
@@ -1905,6 +1928,32 @@ def main(argv: list[str] | None = None) -> int:
             prompt_version=STUB_PROMPT_VERSION,
         )
         print(f"Discovery run {run_id} complete (model={STUB_MODEL})")
+        return 0
+
+    if args.command == "analyze":
+        if not args.stub:
+            parser.error("analyze currently requires --stub (real LLM lands in slice 02)")
+        db_path = Path(args.db_path)
+        canonical_channel_id = resolve_canonical_channel_id(args.channel_input)
+        metadata = fetch_channel_metadata(canonical_channel_id)
+        upsert_channel_metadata(
+            db_path,
+            project_name=args.project_name,
+            metadata=metadata,
+        )
+        videos = fetch_channel_videos(metadata.youtube_channel_id, limit=args.limit)
+        upsert_videos_for_primary_channel(db_path, videos=videos)
+        run_id = run_discovery(
+            db_path,
+            project_name=args.project_name,
+            llm=stub_llm,
+            model=STUB_MODEL,
+            prompt_version=STUB_PROMPT_VERSION,
+        )
+        print(
+            f"Analyzed {metadata.youtube_channel_id} ({metadata.title}): "
+            f"{len(videos)} videos, discovery run {run_id}"
+        )
         return 0
 
     if args.command == "serve-review-ui":

@@ -27,6 +27,33 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 3: CLI `analyze` chain
+
+### Done (TDD, 2 new tests in `test_discovery.py`)
+- Added `analyze` subparser in `cli.py` with `--db-path`, `--project-name`,
+  `--channel-input`, `--limit`, `--stub`. The `--stub` flag is currently
+  required, mirroring `discover`.
+- Handler chains: `resolve_canonical_channel_id(channel_input)` →
+  `fetch_channel_metadata` → `upsert_channel_metadata` (creates project +
+  primary channel) → `fetch_channel_videos` → `upsert_videos_for_primary_channel`
+  → `run_discovery(..., llm=stub_llm)`. Prints a one-line summary.
+- New tests in `AnalyzeCLITests`:
+  - `test_analyze_chains_setup_ingest_and_discover` — monkey-patches the three
+    YouTube callables on the `cli` module, runs `cli.main(["analyze", ...])`
+    against a fresh DB, asserts project + primary channel + 2 videos +
+    1 discovery run + 2 `video_topics` rows with `assignment_source='auto'`.
+  - `test_analyze_requires_stub_flag` — without `--stub`, `cli.main` exits
+    non-zero.
+- All 12 tests in `test_discovery.py` pass. `ReviewUIAppTests` pre-existing
+  failures unchanged.
+
+### Next session — Ralph iteration 4
+1. GUI `/api/state` topic-map payload in `review_ui.py` (latest run's topics + episode counts).
+2. Remove comparison-group panels from primary GUI nav.
+3. Move comparison-group code to `legacy/` with deprecation-warning import shims.
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 2: CLI `discover --stub`
 
 ### Done (TDD, 3 new tests in `test_discovery.py`)
