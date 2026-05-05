@@ -33,6 +33,31 @@ class DiscoveryPayload:
 LLMCallable = Callable[[Sequence[DiscoveryVideo]], DiscoveryPayload]
 
 
+STUB_TOPIC_NAME = "General"
+STUB_MODEL = "stub"
+STUB_PROMPT_VERSION = "stub-v0"
+
+
+def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
+    """Hardcoded LLM stub: one topic, every video assigned to it.
+
+    Used by `discover --stub` to wire the end-to-end pipeline without
+    spending tokens. Real LLM lands in slice 02.
+    """
+    return DiscoveryPayload(
+        topics=[STUB_TOPIC_NAME],
+        assignments=[
+            DiscoveryAssignment(
+                youtube_video_id=video.youtube_video_id,
+                topic_name=STUB_TOPIC_NAME,
+                confidence=1.0,
+                reason="stub assignment",
+            )
+            for video in videos
+        ],
+    )
+
+
 def run_discovery(
     db_path: str | Path,
     *,

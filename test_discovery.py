@@ -12,10 +12,12 @@ from yt_channel_analyzer.db import (
     init_db,
     upsert_videos_for_primary_channel,
 )
+from yt_channel_analyzer import cli
 from yt_channel_analyzer.discovery import (
     DiscoveryAssignment,
     DiscoveryPayload,
     run_discovery,
+    stub_llm,
 )
 from yt_channel_analyzer.youtube import VideoMetadata
 
@@ -436,6 +438,87 @@ class StubDiscoveryRunTests(unittest.TestCase):
             self.assertAlmostEqual(vid1_health["confidence"], 0.9)
             self.assertEqual(vid1_health["reason"], "title mentions sleep")
             self.assertEqual(vid1_health["discovery_run_id"], run_id)
+
+
+class StubLLMTests(unittest.TestCase):
+    def test_stub_llm_returns_one_topic_covering_all_videos(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoveryVideo
+
+        videos = [
+            DiscoveryVideo(
+                youtube_video_id="vid1",
+                title="t1",
+                description=None,
+                published_at=None,
+            ),
+            DiscoveryVideo(
+                youtube_video_id="vid2",
+                title="t2",
+                description=None,
+                published_at=None,
+            ),
+        ]
+        payload = stub_llm(videos)
+        self.assertEqual(len(payload.topics), 1)
+        topic = payload.topics[0]
+        assigned_ids = {a.youtube_video_id for a in payload.assignments}
+        self.assertEqual(assigned_ids, {"vid1", "vid2"})
+        for assignment in payload.assignments:
+            self.assertEqual(assignment.topic_name, topic)
+            self.assertEqual(assignment.confidence, 1.0)
+
+
+class DiscoverCLITests(unittest.TestCase):
+    def test_discover_stub_creates_run_and_assignments(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            exit_code = cli.main(
+                [
+                    "discover",
+                    "--db-path",
+                    str(db_path),
+                    "--project-name",
+                    "proj",
+                    "--stub",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, model, prompt_version, status FROM discovery_runs"
+                ).fetchall()
+                self.assertEqual(len(runs), 1)
+                run = runs[0]
+                self.assertEqual(run["model"], "stub")
+                self.assertEqual(run["status"], "success")
+
+                assignments = conn.execute(
+                    "SELECT video_id, topic_id, assignment_source, discovery_run_id "
+                    "FROM video_topics WHERE discovery_run_id = ?",
+                    (run["id"],),
+                ).fetchall()
+                self.assertEqual(len(assignments), 2)
+                for row in assignments:
+                    self.assertEqual(row["assignment_source"], "auto")
+
+    def test_discover_requires_stub_flag(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "discover",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "proj",
+                    ]
+                )
 
 
 if __name__ == "__main__":

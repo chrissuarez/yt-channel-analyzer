@@ -79,6 +79,12 @@ from yt_channel_analyzer.db import (
     approve_subtopic_suggestion_label,
     supersede_stale_topic_suggestions,
 )
+from yt_channel_analyzer.discovery import (
+    STUB_MODEL,
+    STUB_PROMPT_VERSION,
+    run_discovery,
+    stub_llm,
+)
 from yt_channel_analyzer.comparison_group_suggestions import suggest_comparison_groups_for_video
 from yt_channel_analyzer.group_analysis import GroupAnalysisInput, build_group_analysis
 from yt_channel_analyzer.markdown_export import build_group_markdown_export, write_group_markdown_export
@@ -774,6 +780,18 @@ def build_parser() -> argparse.ArgumentParser:
     supersede_topic_suggestions_parser.add_argument(
         "--label",
         help="Optional specific suggested label to supersede across older runs.",
+    )
+
+    discover_parser = subparsers.add_parser(
+        "discover",
+        help="Run topic discovery for a project's primary channel.",
+    )
+    discover_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
+    discover_parser.add_argument("--project-name", required=True, help="Project whose primary channel to analyze.")
+    discover_parser.add_argument(
+        "--stub",
+        action="store_true",
+        help="Use a hardcoded fake LLM payload (no API call). Required until real LLM lands.",
     )
 
     serve_review_ui_parser = subparsers.add_parser(
@@ -1874,6 +1892,19 @@ def main(argv: list[str] | None = None) -> int:
                 **summary,
             )
         )
+        return 0
+
+    if args.command == "discover":
+        if not args.stub:
+            parser.error("discover currently requires --stub (real LLM lands in slice 02)")
+        run_id = run_discovery(
+            Path(args.db_path),
+            project_name=args.project_name,
+            llm=stub_llm,
+            model=STUB_MODEL,
+            prompt_version=STUB_PROMPT_VERSION,
+        )
+        print(f"Discovery run {run_id} complete (model={STUB_MODEL})")
         return 0
 
     if args.command == "serve-review-ui":

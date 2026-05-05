@@ -27,6 +27,37 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 2: CLI `discover --stub`
+
+### Done (TDD, 3 new tests in `test_discovery.py`)
+- Added `stub_llm(videos) -> DiscoveryPayload` to `discovery.py`. Returns one
+  topic (`General`) with every video assigned to it (`confidence=1.0`,
+  `reason="stub assignment"`). Also exported `STUB_MODEL = "stub"` and
+  `STUB_PROMPT_VERSION = "stub-v0"` so the CLI and tests share the same
+  identifiers.
+- Added `discover` subparser in `cli.py` with `--db-path`, `--project-name`,
+  `--stub`. The `--stub` flag is currently required; without it the parser
+  errors with "real LLM lands in slice 02" — keeps the CLI surface honest
+  until slice 02.
+- New tests:
+  - `StubLLMTests.test_stub_llm_returns_one_topic_covering_all_videos`
+  - `DiscoverCLITests.test_discover_stub_creates_run_and_assignments` —
+    runs `cli.main(["discover", ..., "--stub"])` end-to-end against a
+    seeded 2-video DB and asserts a `discovery_runs` row plus 2
+    `video_topics` rows with `assignment_source='auto'`.
+  - `DiscoverCLITests.test_discover_requires_stub_flag` — without `--stub`
+    the CLI exits non-zero.
+- All 10 tests in `test_discovery.py` pass. The 2 pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` are unchanged.
+
+### Next session — Ralph iteration 3
+1. CLI `analyze` command chaining setup → ingest → discover.
+2. GUI `/api/state` topic-map payload in `review_ui.py` (latest run's topics + episode counts).
+3. Remove comparison-group panels from primary GUI nav.
+4. Move comparison-group code to `legacy/` with deprecation-warning import shims.
+
+---
+
 ## 2026-05-05 — Slice 01 session 2 / Ralph iteration 1: CHECK-constraint repair
 
 ### Done (TDD, 2 new tests in `test_discovery.py`)
