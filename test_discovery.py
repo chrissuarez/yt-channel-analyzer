@@ -791,6 +791,37 @@ class DiscoveryTopicMapHTMLTests(unittest.TestCase):
 
         self.assertIn("discovery", UI_REVISION)
 
+    def test_inline_script_parses_as_javascript(self) -> None:
+        """Run `node --check` on the rendered inline <script>. Catches JS
+        breakage from Python triple-quoted-string escape mistakes (e.g. a
+        bare ``\\n`` inside a single-quoted JS string)."""
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node not available")
+        html = ReviewUIApp._render_html_page()
+        match = re.search(r"<script>(.*?)</script>", html, re.S)
+        self.assertIsNotNone(match, "rendered HTML has no <script> block")
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False
+        ) as fh:
+            fh.write(match.group(1))
+            js_path = fh.name
+        result = subprocess.run(
+            [node, "--check", js_path], capture_output=True, text=True
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"inline <script> failed JS syntax check:\n{result.stderr}",
+        )
+
 
 class DiscoveryTopicMapEpisodesPayloadTests(unittest.TestCase):
     def test_topic_includes_episode_list_with_reason_and_confidence(self) -> None:

@@ -979,7 +979,7 @@ HTML_PAGE = """<!doctype html>
       }
       const list = topic.episodes
         .map((e, i) => `${i + 1}. ${e.title || '(untitled)'} [${e.youtube_video_id}]`)
-        .join('\n');
+        .join('\\n');
       const selectionRaw = window.prompt(
         `Which episodes go to "${newName}"? Enter indices comma-separated (e.g. 1,3,5).\n\n${list}`,
       );
@@ -1207,7 +1207,7 @@ HTML_PAGE = """<!doctype html>
         setStatus(`No other subtopics under '${topicName}' to move to.`, true);
         return;
       }
-      const numbered = candidates.map((name, i) => `${i + 1}. ${name}`).join('\n');
+      const numbered = candidates.map((name, i) => `${i + 1}. ${name}`).join('\\n');
       const raw = window.prompt(
         `Move '${youtubeVideoId}' from '${currentSubtopic}' to which subtopic under '${topicName}'?\n\n${numbered}\n\nEnter the number:`
       );
