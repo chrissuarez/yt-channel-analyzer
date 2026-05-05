@@ -27,6 +27,55 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 06 (partial) / Ralph iteration 10: discovery topic split
+
+### Done (TDD, 14 new tests in `test_discovery.py`)
+- New `split_topic(db_path, project_name, source_name, new_name,
+  youtube_video_ids)` in `db.py`. Validates source != new, requires a
+  non-empty id list, fails on missing project / source / colliding new
+  topic name. Resolves the supplied `youtube_video_ids` to internal video
+  rows scoped to the source topic; ids that aren't on the source are
+  filtered out and reported back as `skipped_video_ids` (raise only if
+  *all* are missing). Within a single transaction it: creates the new
+  topic in the source's project, re-points the matching `video_topics`
+  rows to the new topic, and drops `video_subtopics` rows for those
+  videos whose subtopic still belongs to the source topic (keeps the new
+  topic from inheriting orphaned subtopic membership). Returns
+  `new_topic_id`, `moved_episode_assignments`,
+  `dropped_subtopic_assignments`, `skipped_video_ids`.
+- New `/api/discovery/topic/split` endpoint mirroring merge. Body:
+  `{source_name, new_name, youtube_video_ids}`. Validates the id list is
+  non-empty list of non-empty strings before calling the db helper.
+- UI: each discovery topic card now has a `Split` button next to
+  `Rename`/`Merge`. The JS handler prompts for the new topic name (must
+  not collide), then prompts again with a numbered list of episodes for
+  the user to enter comma-separated indices. Refuses selecting all
+  episodes (suggests Rename instead). Confirm dialog before posting.
+- UI revision bumped to `2026-05-05.6-discovery-topic-split`. Relaxed
+  the `test_ui_revision_advances_for_merge` test to assert the durable
+  `discovery` substring (same pattern earlier iterations used).
+
+### Learned
+- The orphan-subtopic cleanup was the only non-obvious bit of the split
+  semantics. Without it, splitting episodes off "Productivity" into
+  "Time Management" leaves `video_subtopics` rows pointing at
+  Productivity-owned subtopics for the moved videos, which would still
+  render under Productivity if you ever join through subtopic. Dropping
+  those rows is the cheapest path; future iterations can offer a
+  "carry the subtopic with you" affordance if needed.
+- Listing all video ids inside `window.prompt` is fine for stub-scale
+  topics (a handful of episodes) but will get unwieldy past ~20. A
+  dedicated checkbox modal is the obvious follow-up; deferred until the
+  real LLM produces realistic episode counts per topic.
+
+### Next
+- Move an episode between subtopics; mark an assignment as wrong. Then
+  curation surviving a re-run (slice 08).
+- Or pivot to A2: real Haiku/4o-mini batched discovery call to retire
+  the stub.
+
+---
+
 ## 2026-05-05 — Slice 06 (partial) / Ralph iteration 9: discovery topic merge
 
 ### Done (TDD, 11 new tests in `test_discovery.py`)
