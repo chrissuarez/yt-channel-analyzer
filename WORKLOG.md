@@ -27,6 +27,52 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 01 / Ralph iteration 6: GUI per-topic episode list
+
+### Done (TDD, 4 new tests in `test_discovery.py`)
+- Two new test classes: `DiscoveryTopicMapEpisodesPayloadTests` (per-topic
+  `episodes` list shape; multi-topic episode appears under each topic
+  with the right reason/confidence) and `DiscoveryTopicEpisodesHTMLTests`
+  (HTML hook + UI revision marker). Updated the older
+  `test_ui_revision_advances_for_discovery_topic_map_panel` to assert the
+  durable `discovery` substring rather than a stale per-iteration tag.
+- Extended `_build_discovery_topic_map` with a second query that pulls
+  per-topic episode rows joined to `videos` (id/title/thumbnail/
+  published_at/confidence/reason) and groups them onto the topic dicts.
+  Episodes sorted by descending confidence then NOCASE title.
+- New JS helper `renderDiscoveryEpisodeItem` renders each card: 64x36
+  thumbnail (placeholder gradient when missing), two-line clamped title,
+  confidence percentage chip, raw youtube_video_id, italic reason line.
+  Topic cards now include `<ol class="discovery-episode-list">` below
+  the confidence bar.
+- Episode cards get `.low` (opacity 0.78, amber confidence) or
+  `.very-low` (opacity 0.55, red confidence) modifiers below the same
+  thresholds the topic-level confidence bar uses.
+- `UI_REVISION` bumped to `2026-05-05.2-discovery-topic-episodes`.
+- All 22 tests in `test_discovery.py` pass. Two pre-existing
+  `ReviewUIAppTests` failures in `test_transcripts.py` unchanged.
+- Sanity: extracted `<script>` body and `node --check` parses cleanly
+  (41KB).
+
+### Deferred (logged so the next iteration can pick up)
+- Guest name on each episode card — not currently extracted from
+  metadata; needs a description-parser or a separate "guest" field
+  added during ingestion.
+- Subtopics rendered under each topic — `stub_llm` doesn't produce
+  subtopics, so persistence and rendering wait for the real LLM in
+  slice 02 (PRD §A2).
+
+### Next session — Ralph iteration 7
+1. Curation actions on auto-discovered topics: rename, merge, split,
+   move episode between topics, mark assignment as wrong (PRD §A3
+   curation bullets).
+2. Sort options for the per-topic episode list (recency, confidence)
+   (PRD §A3 sort bullet).
+3. Remove comparison-group panels from primary GUI nav.
+4. Move comparison-group code to `legacy/` with deprecation shims.
+
+---
+
 ## 2026-05-05 — Slice 01 / Ralph iteration 5: GUI discovery topic-map panel
 
 ### Done (TDD, 3 new tests in `test_discovery.py`)

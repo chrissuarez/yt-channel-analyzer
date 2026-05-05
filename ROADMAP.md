@@ -77,9 +77,9 @@ The smallest version of the app that solves a real user problem ("which episodes
 #### A3. Topic map UI (extend `review_ui.py`)
 - [x] `/api/state` payload: `discovery_topic_map` key surfaces latest run's topics with episode count + average confidence (Ralph iteration 4, commit `89437b7`)
 - [x] Render auto-discovered topic map in HTML/JS: topics with episode counts, subtopic counts, average confidence (Ralph iteration 5 — panel above the pre-pivot Topic Map; subtopic counts deferred until §A2 LLM produces real subtopics)
-- [ ] Topic detail: subtopics + episodes assigned to each
-- [ ] Per-episode card: title, thumbnail, guest, "why this episode is here" reason, confidence indicator (e.g. faded/muted styling for low confidence)
-- [ ] Episodes appear under every topic they belong to (multi-topic display)
+- [ ] Topic detail: subtopics + episodes assigned to each *(episodes done Ralph iteration 6; subtopics deferred until §A2 LLM produces them)*
+- [x] Per-episode card: title, thumbnail, "why this episode is here" reason, confidence indicator (Ralph iteration 6, commit `f2db466`; faded/muted styling for low confidence; guest deferred — not currently extracted)
+- [x] Episodes appear under every topic they belong to (multi-topic display) (Ralph iteration 6)
 - [ ] Curation actions: rename topic, merge two topics, split a topic, move episode between subtopics, mark assignment as wrong
 - [ ] Sort options for episode lists: recency, view count, confidence
 
