@@ -27,6 +27,49 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-05 — Slice 06 (partial) / Ralph iteration 11: move episode between subtopics
+
+### Done (TDD, 13 new tests in `test_discovery.py`)
+- New `move_episode_subtopic(db_path, project_name, topic_name,
+  youtube_video_id, target_subtopic_name)` in `db.py`. Resolves project,
+  topic, target subtopic (must be under that topic), and video; rejects
+  unknowns. Refuses if the video isn't already on the topic. If the video
+  has an existing `video_subtopics` row under any subtopic of that topic,
+  re-points it to the target (no-op when already on target). Otherwise
+  inserts a new row with `assignment_source='manual'` to flag the
+  curation move. Returns `{moved, inserted, previous_subtopic_name,
+  target_subtopic_id}`.
+- New `/api/discovery/episode/move-subtopic` endpoint mirroring the
+  rename/merge/split shape. Body: `{topic_name, youtube_video_id,
+  target_subtopic_name}`. Tailored success messages for moved / attached /
+  no-op.
+- UI: each video chip inside the selected-topic inventory's subtopic
+  buckets now has a `Move` button (sibling subtopics only — hidden when a
+  topic has only one subtopic). The JS handler prompts with a numbered
+  list of candidate subtopics and asks for confirmation before posting.
+- UI revision bumped to `2026-05-05.7-discovery-episode-move-subtopic`.
+  Relaxed the `test_ui_revision_advances_for_split` assertion to the
+  durable `discovery` substring (same pattern merge used after split
+  shipped).
+
+### Learned
+- The natural surface for "move episode between subtopics" is the legacy
+  topic-inventory panel, not the discovery topic-map panel. The discovery
+  payload still doesn't expose subtopics (deferred until §A2 produces
+  real subtopic data), and the inventory view already groups videos by
+  subtopic, which is the structure this action needs.
+- Per-row `assignment_source='manual'` on the move means future code that
+  distinguishes auto vs. curated subtopic membership has the signal it
+  needs without an extra column.
+
+### Next
+- Mark an assignment as wrong (the last §A3 curation action). Then
+  curation surviving a re-run (slice 08).
+- Or pivot to A2: real Haiku/4o-mini batched discovery call to retire
+  the stub.
+
+---
+
 ## 2026-05-05 — Slice 06 (partial) / Ralph iteration 10: discovery topic split
 
 ### Done (TDD, 14 new tests in `test_discovery.py`)
