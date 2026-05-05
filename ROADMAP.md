@@ -80,7 +80,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [ ] Topic detail: subtopics + episodes assigned to each *(episodes done Ralph iteration 6; subtopics deferred until §A2 LLM produces them)*
 - [x] Per-episode card: title, thumbnail, "why this episode is here" reason, confidence indicator (Ralph iteration 6, commit `f2db466`; faded/muted styling for low confidence; guest deferred — not currently extracted)
 - [x] Episodes appear under every topic they belong to (multi-topic display) (Ralph iteration 6)
-- [ ] Curation actions: rename topic, merge two topics, split a topic, move episode between subtopics, mark assignment as wrong
+- [ ] Curation actions: rename topic, merge two topics, split a topic, move episode between subtopics, mark assignment as wrong *(rename happy path done Ralph iteration 8 — `/api/discovery/topic/rename` against stub topics; merge/split/move/mark-wrong + curation-survives-rerun deferred)*
 - [x] Sort options for episode lists: recency, confidence (Ralph iteration 7, JS-side per-topic dropdown, default recency; view count deferred — not currently ingested)
 
 #### A4. Move legacy code
