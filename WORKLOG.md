@@ -27,6 +27,59 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Slice 07 (partial) / Ralph iteration 12: mark assignment wrong
+
+### Done (TDD, 14 new tests in `test_discovery.py`)
+- New `wrong_assignments` table in `db.py` schema:
+  `(id, video_id, topic_id, subtopic_id NULLABLE, reason NULLABLE, created_at)`.
+  This is the first persistent curation-event record (slice 06 stopped at
+  `assignment_source='manual'`). Slice 08 can replay these to keep
+  curation surviving discovery re-runs.
+- New `mark_assignment_wrong(db_path, *, project_name, topic_name,
+  youtube_video_id, subtopic_name=None, reason=None)` in `db.py`. When
+  `subtopic_name` is None: deletes the `video_topics` row and ALSO drops
+  any `video_subtopics` rows whose subtopic is under that topic
+  (otherwise the video would still hang off the topic via subtopic
+  joins). When provided: deletes only the `video_subtopics` row, leaves
+  the topic membership intact. Records the event row in
+  `wrong_assignments` with `subtopic_id` populated only for the
+  subtopic-scoped path. Rejects unknown project / topic / video /
+  subtopic, and rejects when the row to remove doesn't exist.
+- New `/api/discovery/episode/mark-wrong` endpoint. Body:
+  `{topic_name, youtube_video_id, subtopic_name?, reason?}`. Tailored
+  success messages for topic vs subtopic removal.
+- UI: each `discovery-episode` chip in the discovery topic-map's
+  episode list now has a `Wrong topic?` button (calls
+  `markEpisodeWrong(topic, vid, null)`). Each subtopic-bucket video chip
+  in the selected-topic inventory now has a `Wrong subtopic?` button
+  (calls `markEpisodeWrong(topic, vid, subtopic)`). Confirm dialog
+  before posting.
+- UI revision bumped to `2026-05-05.8-discovery-episode-mark-wrong`.
+  Existing `test_ui_revision_advances_for_move` relaxed to the durable
+  `discovery` substring (same pattern split/merge used after their
+  successors shipped).
+
+### Learned
+- The "remove and record" pattern looks identical for topic-scoped and
+  subtopic-scoped wrong-marks, but the topic case has to also clear
+  child `video_subtopics` rows or the video stays attached to the topic
+  via subtopic membership joins. Caught by the dedicated
+  `test_mark_wrong_topic_also_drops_video_subtopics_under_topic` test.
+- Kept the curation event minimal (`wrong_assignments` table only — not
+  a generic `topic_curation_events` log) per scope discipline. Slice 08
+  can generalize once it has concrete replay needs.
+
+### Next
+- Slice 08: curation surviving discovery re-runs. Likely needs to
+  generalize `wrong_assignments` (and the existing
+  `assignment_source='manual'` markers on rename/merge/split/move) into
+  an event log that the next discovery run consults before applying its
+  output.
+- Or pivot to A2: real Haiku/4o-mini batched discovery call to retire
+  the stub.
+
+---
+
 ## 2026-05-05 — Slice 06 (partial) / Ralph iteration 11: move episode between subtopics
 
 ### Done (TDD, 13 new tests in `test_discovery.py`)

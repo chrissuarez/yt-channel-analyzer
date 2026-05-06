@@ -1,6 +1,6 @@
 # 07 — Curation actions: split + move episode + mark wrong
 
-Status: needs-triage
+Status: ready-for-human
 Type: AFK
 User stories covered: 11, 12, 13
 Roadmap sections: §A3
@@ -21,12 +21,12 @@ All three actions reuse the curation-event mechanism introduced in slice 06 so t
 
 ## Acceptance criteria
 
-- [ ] GUI: split topic action with episode-picker UI to redistribute
-- [ ] GUI: move episode between subtopics (drag, dropdown, or button — implementer's choice)
-- [ ] GUI: mark assignment wrong action on each episode card (small "wrong topic?" affordance)
-- [ ] Backend endpoints for each action persist transactionally
-- [ ] Marked-wrong assignments removed from the displayed assignment list; recorded as curation events
-- [ ] Tests cover: split with non-overlapping episode subsets; move episode within parent topic; mark-wrong removal
+- [x] GUI: split topic action with episode-picker UI to redistribute (Ralph iteration 10)
+- [x] GUI: move episode between subtopics (drag, dropdown, or button — implementer's choice) (Ralph iteration 11)
+- [x] GUI: mark assignment wrong action on each episode card (small "wrong topic?" affordance) (Ralph iteration 12)
+- [x] Backend endpoints for each action persist transactionally (`/api/discovery/topic/split`, `/api/discovery/episode/move-subtopic`, `/api/discovery/episode/mark-wrong`)
+- [x] Marked-wrong assignments removed from the displayed assignment list; recorded as curation events (`wrong_assignments` table, Ralph iteration 12)
+- [x] Tests cover: split with non-overlapping episode subsets; move episode within parent topic; mark-wrong removal (`test_discovery.py`)
 
 ## Blocked by
 

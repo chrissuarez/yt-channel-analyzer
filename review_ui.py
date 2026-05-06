@@ -32,6 +32,7 @@ from yt_channel_analyzer.db import (
     list_videos_for_comparison_group_suggestions,
     list_videos_for_subtopic_suggestions,
     list_videos_for_topic_suggestions,
+    mark_assignment_wrong,
     move_episode_subtopic,
     reject_comparison_group_suggestion_label,
     reject_subtopic_suggestion_label,
@@ -55,7 +56,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.7-discovery-episode-move-subtopic"
+UI_REVISION = "2026-05-05.8-discovery-episode-mark-wrong"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 HTML_PAGE = """<!doctype html>
@@ -326,6 +327,32 @@ HTML_PAGE = """<!doctype html>
     .discovery-episode-empty {
       margin-top: 10px;
       font-size: 12px;
+    }
+    .discovery-episode-wrong {
+      margin-top: 6px;
+      background: rgba(252, 165, 165, 0.10);
+      color: var(--bad);
+      border: 1px solid rgba(252, 165, 165, 0.40);
+      border-radius: 999px;
+      padding: 2px 10px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .discovery-episode-wrong:hover {
+      background: rgba(252, 165, 165, 0.22);
+    }
+    .subtopic-video-wrong {
+      margin-left: 6px;
+      background: rgba(252, 165, 165, 0.10);
+      color: var(--bad);
+      border: 1px solid rgba(252, 165, 165, 0.40);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .subtopic-video-wrong:hover {
+      background: rgba(252, 165, 165, 0.22);
     }
     .discovery-episode-sort-row {
       display: flex;
@@ -1079,7 +1106,7 @@ HTML_PAGE = """<!doctype html>
         const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
         const sortedEpisodes = sortDiscoveryEpisodes(topic.episodes, sortMode);
         const episodeListHtml = sortedEpisodes.length
-          ? `<ol class="discovery-episode-list">${sortedEpisodes.map(renderDiscoveryEpisodeItem).join('')}</ol>`
+          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name)).join('')}</ol>`
           : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
         const sortRowHtml = (topic.episodes && topic.episodes.length)
           ? `<div class="discovery-episode-sort-row">
@@ -1125,7 +1152,7 @@ HTML_PAGE = """<!doctype html>
       }).join('');
     }
 
-    function renderDiscoveryEpisodeItem(episode) {
+    function renderDiscoveryEpisodeItem(episode, topicName) {
       const c = (episode.confidence == null) ? null : Math.max(0, Math.min(1, episode.confidence));
       const pct = (c == null) ? '—' : `${Math.round(c * 100)}%`;
       const lowClass = (c != null && c < 0.33) ? ' very-low' : ((c != null && c < 0.66) ? ' low' : '');
@@ -1135,6 +1162,11 @@ HTML_PAGE = """<!doctype html>
       const thumbHtml = episode.thumbnail_url
         ? `<img class="discovery-episode-thumb" alt="" loading="lazy" src="${escapeHtml(episode.thumbnail_url)}">`
         : '<div class="discovery-episode-thumb placeholder" aria-hidden="true"></div>';
+      const wrongButton = topicName
+        ? `<button class="discovery-episode-wrong"
+                   type="button"
+                   onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(episode.youtube_video_id || '')}, null)'>Wrong topic?</button>`
+        : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -1145,9 +1177,25 @@ HTML_PAGE = """<!doctype html>
               <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
             </div>
             ${reasonHtml}
+            ${wrongButton}
           </div>
         </li>
       `;
+    }
+
+    async function markEpisodeWrong(topicName, youtubeVideoId, subtopicName) {
+      const target = subtopicName
+        ? `subtopic '${subtopicName}' under '${topicName}'`
+        : `topic '${topicName}'`;
+      if (!window.confirm(`Mark '${youtubeVideoId}' as wrong on ${target}? It will be removed from this assignment.`)) return;
+      const result = await postJson('/api/discovery/episode/mark-wrong', {
+        topic_name: topicName,
+        youtube_video_id: youtubeVideoId,
+        subtopic_name: subtopicName,
+      });
+      if (!result) return;
+      setStatus(result.message || 'Marked wrong.');
+      await fetchState();
     }
 
     function renderTopicMap(items) {
@@ -1199,7 +1247,10 @@ HTML_PAGE = """<!doctype html>
                    type="button"
                    onclick='moveEpisodeSubtopic(${JSON.stringify(topicName)}, ${JSON.stringify(currentSubtopic)}, ${JSON.stringify(video.youtube_video_id || '')}, ${JSON.stringify(candidateSubtopics)})'>Move</button>`
         : '';
-      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div>${moveButton}</div>`;
+      const wrongButton = `<button class="subtopic-video-wrong"
+                                   type="button"
+                                   onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(video.youtube_video_id || '')}, ${JSON.stringify(currentSubtopic)})'>Wrong subtopic?</button>`;
+      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div>${moveButton}${wrongButton}</div>`;
     }
 
     async function moveEpisodeSubtopic(topicName, currentSubtopic, youtubeVideoId, candidates) {
@@ -2649,6 +2700,42 @@ class ReviewUIApp:
                 msg = (
                     f"'{youtube_video_id}' is already on subtopic "
                     f"'{target_subtopic_name}' under '{topic_name}'."
+                )
+            return {"ok": True, "message": msg, "stats": stats}
+        if path == "/api/discovery/episode/mark-wrong":
+            topic_name = self._require_text(body, "topic_name")
+            youtube_video_id = self._require_text(body, "youtube_video_id")
+            raw_subtopic = body.get("subtopic_name")
+            subtopic_name = (
+                raw_subtopic.strip()
+                if isinstance(raw_subtopic, str) and raw_subtopic.strip()
+                else None
+            )
+            raw_reason = body.get("reason")
+            reason = (
+                raw_reason.strip()
+                if isinstance(raw_reason, str) and raw_reason.strip()
+                else None
+            )
+            project_name = _resolve_primary_project_name(self.db_path)
+            stats = mark_assignment_wrong(
+                self.db_path,
+                project_name=project_name,
+                topic_name=topic_name,
+                youtube_video_id=youtube_video_id,
+                subtopic_name=subtopic_name,
+                reason=reason,
+            )
+            if subtopic_name is None:
+                msg = (
+                    f"Marked '{youtube_video_id}' as wrong on topic "
+                    f"'{topic_name}'. Removed from this topic."
+                )
+            else:
+                msg = (
+                    f"Marked '{youtube_video_id}' as wrong on subtopic "
+                    f"'{subtopic_name}' under '{topic_name}'. Removed from "
+                    f"this subtopic."
                 )
             return {"ok": True, "message": msg, "stats": stats}
         raise ReviewUIError(f"Unsupported API route: {path}")
