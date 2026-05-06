@@ -27,6 +27,37 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 4: tick prompt-shape checkbox at slice scope
+
+### Done (no code change; doc-only)
+- Ticked ROADMAP §A2 line "Prompt produces: list of broad topics with subtopics,
+  plus per-episode topic/subtopic assignments with confidence and reason" as
+  satisfied at slice 02 scope: prompt produces broad topics + per-episode
+  single-topic assignments. Subtopics/confidence/reason are deferred to slices
+  03–05 per issue 02 spec ("Subtopics, confidence, multi-topic, and reason
+  fields stay out — they ship in slices 03, 04, 05").
+- Annotation flags the contradiction so future iterations don't re-open the
+  checkbox: `_DISCOVERY_SCHEMA` is `additionalProperties: false` and rejects
+  those keys today by design — slices 03–05 widen the schema deliberately.
+
+### Learned
+- Roadmap §A2 was authored before per-issue slicing was finalized, so several
+  checkboxes (line 72 in particular) bundle multi-slice scope into a single
+  bullet. Pattern from §A3 (e.g. lines 80, 84) is to tick with a parenthetical
+  noting what's deferred and to which slice — followed here.
+
+### Next
+- Roadmap line 73: "Validate response shape; reject malformed batches; retry
+  once" — Extractor already owns schema validation + one retry. Discovery-side
+  work needed: when the Extractor raises after the retry, mark the
+  `discovery_runs` row with `status='error'` and ensure no partial state
+  (topics / `video_topics`) is persisted. `run_discovery` currently calls the
+  llm before opening the cursor + insert path, so wrap the llm call in a
+  try/except that inserts an errored run row and re-raises (or returns a
+  sentinel — TBD per consistency with current callers).
+
+---
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 3: single batched LLM call site
 
 ### Done (TDD, 9 new tests in `test_discovery.py`)
