@@ -27,6 +27,57 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 5: errored-run path on llm failure
+
+### Done (TDD, 2 new tests in `test_discovery.py`)
+- `discovery.py` `run_discovery` now wraps the `llm(videos)` call in
+  `try/except Exception`. On any exception it inserts a `discovery_runs`
+  row with `status='error'` (model + prompt_version still recorded for
+  audit), commits, then re-raises. Topic and `video_topics` inserts only
+  run after a successful payload, so the error path leaves no partial
+  state — exactly the slice 02 acceptance: "on second failure the run is
+  marked errored and no partial state is persisted".
+- New `RunDiscoveryErrorPathTests`:
+  - `test_llm_error_marks_run_errored_and_persists_no_partial_state` —
+    seeds a 2-video channel, passes a callable that raises
+    `SchemaValidationError` (the same exception Extractor.run_one
+    re-raises after its one-retry exhausts), asserts a single
+    `discovery_runs` row with `status='error'`, no `topics`, no
+    `video_topics`, and that the exception propagates.
+  - `test_llm_error_does_not_corrupt_prior_successful_run` — runs a
+    successful stub run first, then a failing run, asserts both rows
+    exist with the right statuses and the prior run's assignments
+    remain intact.
+
+### Learned
+- `_run_single_with_retry` in `extractor/runner.py` already does the
+  one-retry on parse failure and writes audit rows to `llm_calls` for
+  both `parse_status='retry'` and `parse_status='failed'`. Discovery only
+  needed the surface-level error path. Tests use `SchemaValidationError`
+  rather than a generic `Exception` so they exercise the realistic
+  failure shape.
+- Bare `except Exception` is intentional here: any exception means we
+  shouldn't persist topics/assignments. Catching `ExtractorError`
+  specifically would silently drop other failure modes (network errors,
+  KeyError on context dict, etc.) and still leave a partial state risk.
+
+### Next
+- Roadmap §A2 line 74: "Persist to `topics`, `subtopics`, junction
+  tables, `discovery_runs` *(persistence done; awaits real payload)*".
+  This is effectively done — `run_discovery` already persists topics +
+  `video_topics` + `discovery_runs`. `subtopics`/`video_subtopics`
+  intentionally stay empty in slice 02 (deferred to slice 03 per issue
+  spec). The bullet wraps both slice-02 and slice-03 scope; the
+  appropriate next-iteration move is to tick it with a slice-02
+  parenthetical (mirroring the line 72 / iteration 4 pattern) and let
+  slice 03 widen the schema + handlers.
+- After that line, the §A2 bullets are exhausted and the remaining issue
+  02 acceptance criteria (smoke test on a real channel; cost-tracking
+  note) require running the real LLM — that is HITL trigger #1 territory
+  and should pause the loop for human review.
+
+---
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 4: tick prompt-shape checkbox at slice scope
 
 ### Done (no code change; doc-only)

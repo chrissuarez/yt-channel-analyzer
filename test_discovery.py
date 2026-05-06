@@ -3320,5 +3320,104 @@ class RealLLMGuardTests(_RegistryIsolation):
                         os.environ["RALPH_ALLOW_REAL_LLM"] = prior
 
 
+class RunDiscoveryErrorPathTests(unittest.TestCase):
+    """When the LLM call raises (e.g. parse failure after Extractor's retry),
+    `run_discovery` records an errored `discovery_runs` row and persists no
+    partial topic / assignment state. The exception is re-raised so callers
+    can surface it.
+    """
+
+    def test_llm_error_marks_run_errored_and_persists_no_partial_state(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            run_discovery,
+        )
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            def failing_llm(_videos):
+                raise SchemaValidationError("malformed after retry")
+
+            with self.assertRaises(SchemaValidationError):
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=failing_llm,
+                    model="haiku-4-5",
+                    prompt_version=DISCOVERY_PROMPT_VERSION,
+                )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, model, prompt_version, status FROM discovery_runs"
+                ).fetchall()
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0]["status"], "error")
+                self.assertEqual(runs[0]["model"], "haiku-4-5")
+                self.assertEqual(runs[0]["prompt_version"], DISCOVERY_PROMPT_VERSION)
+
+                topics = conn.execute("SELECT id FROM topics").fetchall()
+                self.assertEqual(topics, [])
+
+                assignments = conn.execute(
+                    "SELECT video_id FROM video_topics WHERE discovery_run_id = ?",
+                    (runs[0]["id"],),
+                ).fetchall()
+                self.assertEqual(assignments, [])
+
+    def test_llm_error_does_not_corrupt_prior_successful_run(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            run_discovery,
+            stub_llm,
+        )
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            ok_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            def failing_llm(_videos):
+                raise SchemaValidationError("malformed after retry")
+
+            with self.assertRaises(SchemaValidationError):
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=failing_llm,
+                    model="haiku-4-5",
+                    prompt_version=DISCOVERY_PROMPT_VERSION,
+                )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, status FROM discovery_runs ORDER BY id"
+                ).fetchall()
+                self.assertEqual(len(runs), 2)
+                self.assertEqual(runs[0]["id"], ok_run_id)
+                self.assertEqual(runs[0]["status"], "success")
+                self.assertEqual(runs[1]["status"], "error")
+
+                # The successful run's assignments are still intact.
+                first_run_assignments = conn.execute(
+                    "SELECT video_id FROM video_topics WHERE discovery_run_id = ?",
+                    (ok_run_id,),
+                ).fetchall()
+                self.assertEqual(len(first_run_assignments), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

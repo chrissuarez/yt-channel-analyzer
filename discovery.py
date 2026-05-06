@@ -422,7 +422,24 @@ def run_discovery(
         ]
         video_id_by_yt = {row["youtube_video_id"]: row["id"] for row in video_rows}
 
-        payload = llm(videos)
+        try:
+            payload = llm(videos)
+        except Exception:
+            # LLM (or its retry) failed — record an errored run row so the
+            # failure is auditable, persist no partial topic / assignment
+            # state, and re-raise for the caller. Slice 02 acceptance:
+            # "on second failure the run is marked errored and no partial
+            # state is persisted".
+            err_cursor = connection.cursor()
+            err_cursor.execute(
+                """
+                INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
+                VALUES (?, ?, ?, 'error')
+                """,
+                (channel_id, model, prompt_version),
+            )
+            connection.commit()
+            raise
 
         cursor = connection.cursor()
         cursor.execute(
