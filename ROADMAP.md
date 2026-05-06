@@ -84,7 +84,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Sort options for episode lists: recency, confidence (Ralph iteration 7, JS-side per-topic dropdown, default recency; view count deferred — not currently ingested)
 - [x] Configurable low-confidence threshold for episode card styling (env var `YTA_LOW_CONFIDENCE_THRESHOLD`; default 0.5; replaces the hardcoded 0.33/0.66 dual thresholds shipped in iteration 6 — Ralph iteration 13, threshold flows through `_build_discovery_topic_map` payload to JS)
 - [x] Test asserting low-confidence episode cards render with the distinct faded/muted style on a mixed-confidence fixture *(Ralph iteration 13 — `DiscoveryLowConfidenceThresholdTests` seeds a 0.2/0.5/0.9 fixture and asserts `_low_confidence_class` marks the sub-threshold one as `low`; HTML test confirms `.discovery-episode.low` CSS still ships the faded/muted style)*
-- [ ] Document the sort-persistence decision (currently: per-topic dropdown resets to recency on reload) in the issue 09 spec or a brief note in WORKLOG/CONTEXT *(issue 09)*
+- [x] Document the sort-persistence decision (per-topic dropdown resets to recency on reload; not persisted) in the issue 09 spec — Decisions section (Ralph iteration 14)
 
 #### A4. Move legacy code
 - [ ] Create `legacy/` directory

@@ -27,6 +27,23 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 09 / Ralph iteration 14: document sort-persistence decision
+
+### Done (docs only — no code)
+- Added Decisions section to `.scratch/phase-a-topic-map/issues/09-sort-and-low-confidence-styling.md`:
+  - Sort persistence: per-topic JS `Map`, not persisted to localStorage/server, resets to recency on reload. Rationale: cheapest-to-ship, reversible (localStorage is a strict superset), single-user app, and topic-rename/merge/split already complicates a stable persistence key.
+  - View-count sort option: deferred because `videos.view_count` is not ingested. Listed as a known acceptance-criteria gap with a clear unblock condition.
+- Ticked all five issue 09 acceptance criteria checkboxes in the spec to reflect met state (with cross-refs to the deferral notes).
+- Ticked the last unchecked §A3 sort-persistence checkbox in `ROADMAP.md`.
+
+### Issue 09 status
+- All five acceptance criteria met; remaining §A3 unchecked items belong to other issues (subtopic rendering, blocked on §A2 real LLM). Branch is ready for `<ralph>COMPLETE</ralph>` next iteration.
+
+### Next
+- Next iteration: confirm acceptance criteria all met and emit COMPLETE for the branch.
+
+---
+
 ## 2026-05-06 — Issue 09 / Ralph iteration 13: configurable low-confidence threshold
 
 ### Done (10 new tests in `test_discovery.py::DiscoveryLowConfidenceThresholdTests`)
