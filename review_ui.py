@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -56,8 +57,30 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-05.8-discovery-episode-mark-wrong"
+UI_REVISION = "2026-05-06.9-discovery-confidence-threshold"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
+
+DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
+LOW_CONFIDENCE_THRESHOLD_ENV_VAR = "YTA_LOW_CONFIDENCE_THRESHOLD"
+
+
+def _load_low_confidence_threshold() -> float:
+    raw = os.environ.get(LOW_CONFIDENCE_THRESHOLD_ENV_VAR)
+    if raw is None or not raw.strip():
+        return DEFAULT_LOW_CONFIDENCE_THRESHOLD
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_LOW_CONFIDENCE_THRESHOLD
+    if not 0.0 <= value <= 1.0:
+        return DEFAULT_LOW_CONFIDENCE_THRESHOLD
+    return value
+
+
+def _low_confidence_class(confidence: float | None, threshold: float) -> str:
+    if confidence is None:
+        return ""
+    return "low" if confidence < threshold else ""
 
 HTML_PAGE = """<!doctype html>
 <html lang="en">
@@ -265,7 +288,6 @@ HTML_PAGE = """<!doctype html>
       border-radius: 999px;
     }
     .confidence-bar.low > span { background: rgba(251, 191, 36, 0.6); }
-    .confidence-bar.very-low > span { background: rgba(252, 165, 165, 0.6); }
     .discovery-episode-list {
       list-style: none;
       padding: 0;
@@ -282,8 +304,7 @@ HTML_PAGE = """<!doctype html>
       border-radius: 12px;
       background: rgba(11,16,32,0.42);
     }
-    .discovery-episode.low { opacity: 0.78; }
-    .discovery-episode.very-low { opacity: 0.55; }
+    .discovery-episode.low { opacity: 0.55; }
     .discovery-episode-thumb {
       width: 64px;
       height: 36px;
@@ -316,8 +337,7 @@ HTML_PAGE = """<!doctype html>
       font-weight: 700;
       color: var(--good);
     }
-    .discovery-episode.low .discovery-episode-confidence { color: var(--warn); }
-    .discovery-episode.very-low .discovery-episode-confidence { color: var(--bad); }
+    .discovery-episode.low .discovery-episode-confidence { color: var(--bad); }
     .discovery-episode-reason {
       margin-top: 4px;
       font-size: 12px;
@@ -1096,17 +1116,16 @@ HTML_PAGE = """<!doctype html>
         grid.innerHTML = '<div class="empty">Latest discovery run produced no topic assignments.</div>';
         return;
       }
+      const lowThreshold = (typeof map.low_confidence_threshold === 'number') ? map.low_confidence_threshold : 0.5;
       grid.innerHTML = topics.map((topic) => {
         const confidence = (topic.avg_confidence == null) ? null : Math.max(0, Math.min(1, topic.avg_confidence));
         const pct = (confidence == null) ? '—' : `${Math.round(confidence * 100)}%`;
-        const barClass = (confidence == null || confidence >= 0.66)
-          ? ''
-          : (confidence >= 0.33 ? 'low' : 'very-low');
+        const barClass = (confidence != null && confidence < lowThreshold) ? 'low' : '';
         const barWidth = (confidence == null) ? 0 : Math.round(confidence * 100);
         const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
         const sortedEpisodes = sortDiscoveryEpisodes(topic.episodes, sortMode);
         const episodeListHtml = sortedEpisodes.length
-          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name)).join('')}</ol>`
+          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold)).join('')}</ol>`
           : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
         const sortRowHtml = (topic.episodes && topic.episodes.length)
           ? `<div class="discovery-episode-sort-row">
@@ -1152,10 +1171,11 @@ HTML_PAGE = """<!doctype html>
       }).join('');
     }
 
-    function renderDiscoveryEpisodeItem(episode, topicName) {
+    function renderDiscoveryEpisodeItem(episode, topicName, lowThreshold) {
+      const threshold = (typeof lowThreshold === 'number') ? lowThreshold : 0.5;
       const c = (episode.confidence == null) ? null : Math.max(0, Math.min(1, episode.confidence));
       const pct = (c == null) ? '—' : `${Math.round(c * 100)}%`;
-      const lowClass = (c != null && c < 0.33) ? ' very-low' : ((c != null && c < 0.66) ? ' low' : '');
+      const lowClass = (c != null && c < threshold) ? ' low' : '';
       const reasonHtml = episode.reason
         ? `<div class="discovery-episode-reason">${escapeHtml(episode.reason)}</div>`
         : '';
@@ -2127,6 +2147,7 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
         "prompt_version": run_row["prompt_version"],
         "status": run_row["status"],
         "created_at": run_row["created_at"],
+        "low_confidence_threshold": _load_low_confidence_threshold(),
         "topics": [
             {
                 "name": row["topic_name"],

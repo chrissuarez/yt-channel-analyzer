@@ -2509,5 +2509,250 @@ class DiscoveryEpisodeMarkWrongTests(unittest.TestCase):
         self.assertIn("discovery", UI_REVISION)
 
 
+class DiscoveryLowConfidenceThresholdTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import os
+
+        self._saved_env = os.environ.pop("YTA_LOW_CONFIDENCE_THRESHOLD", None)
+
+    def tearDown(self) -> None:
+        import os
+
+        if self._saved_env is None:
+            os.environ.pop("YTA_LOW_CONFIDENCE_THRESHOLD", None)
+        else:
+            os.environ["YTA_LOW_CONFIDENCE_THRESHOLD"] = self._saved_env
+
+    def test_default_threshold_is_half(self) -> None:
+        from yt_channel_analyzer.review_ui import (
+            DEFAULT_LOW_CONFIDENCE_THRESHOLD,
+            _load_low_confidence_threshold,
+        )
+
+        self.assertEqual(DEFAULT_LOW_CONFIDENCE_THRESHOLD, 0.5)
+        self.assertEqual(_load_low_confidence_threshold(), 0.5)
+
+    def test_env_var_overrides_threshold(self) -> None:
+        import os
+
+        from yt_channel_analyzer.review_ui import _load_low_confidence_threshold
+
+        os.environ["YTA_LOW_CONFIDENCE_THRESHOLD"] = "0.7"
+        self.assertAlmostEqual(_load_low_confidence_threshold(), 0.7)
+
+    def test_invalid_env_var_falls_back_to_default(self) -> None:
+        import os
+
+        from yt_channel_analyzer.review_ui import _load_low_confidence_threshold
+
+        os.environ["YTA_LOW_CONFIDENCE_THRESHOLD"] = "not-a-number"
+        self.assertEqual(_load_low_confidence_threshold(), 0.5)
+
+    def test_out_of_range_env_var_falls_back_to_default(self) -> None:
+        import os
+
+        from yt_channel_analyzer.review_ui import _load_low_confidence_threshold
+
+        os.environ["YTA_LOW_CONFIDENCE_THRESHOLD"] = "1.5"
+        self.assertEqual(_load_low_confidence_threshold(), 0.5)
+
+    def test_low_confidence_class_below_threshold(self) -> None:
+        from yt_channel_analyzer.review_ui import _low_confidence_class
+
+        self.assertEqual(_low_confidence_class(0.2, 0.5), "low")
+
+    def test_low_confidence_class_at_or_above_threshold(self) -> None:
+        from yt_channel_analyzer.review_ui import _low_confidence_class
+
+        self.assertEqual(_low_confidence_class(0.5, 0.5), "")
+        self.assertEqual(_low_confidence_class(0.9, 0.5), "")
+
+    def test_low_confidence_class_handles_none(self) -> None:
+        from yt_channel_analyzer.review_ui import _low_confidence_class
+
+        self.assertEqual(_low_confidence_class(None, 0.5), "")
+
+    def test_payload_includes_low_confidence_threshold(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_payload = DiscoveryPayload(
+                topics=["Health"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            self.assertIn("low_confidence_threshold", topic_map)
+            self.assertEqual(topic_map["low_confidence_threshold"], 0.5)
+
+    def test_payload_threshold_reflects_env_override(self) -> None:
+        import os
+
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        os.environ["YTA_LOW_CONFIDENCE_THRESHOLD"] = "0.42"
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_payload = DiscoveryPayload(
+                topics=["Health"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            self.assertAlmostEqual(topic_map["low_confidence_threshold"], 0.42)
+
+    def test_mixed_confidence_fixture_classifies_low_episodes(self) -> None:
+        from yt_channel_analyzer.review_ui import (
+            _low_confidence_class,
+            build_state_payload,
+        )
+        from yt_channel_analyzer.youtube import VideoMetadata
+        from yt_channel_analyzer.db import (
+            init_db,
+            upsert_videos_for_primary_channel,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            init_db(
+                db_path,
+                project_name="proj",
+                channel_id="UC123",
+                channel_title="Channel",
+                channel_handle="@channel",
+            )
+            upsert_videos_for_primary_channel(
+                db_path,
+                videos=[
+                    VideoMetadata(
+                        youtube_video_id="vidLow",
+                        title="Low conf",
+                        description="",
+                        published_at="2026-04-01T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                    VideoMetadata(
+                        youtube_video_id="vidMid",
+                        title="Mid conf",
+                        description="",
+                        published_at="2026-04-02T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                    VideoMetadata(
+                        youtube_video_id="vidHigh",
+                        title="High conf",
+                        description="",
+                        published_at="2026-04-03T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                ],
+            )
+
+            run_payload = DiscoveryPayload(
+                topics=["Mixed"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vidLow",
+                        topic_name="Mixed",
+                        confidence=0.2,
+                        reason="weak match",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vidMid",
+                        topic_name="Mixed",
+                        confidence=0.5,
+                        reason="exactly threshold",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vidHigh",
+                        topic_name="Mixed",
+                        confidence=0.9,
+                        reason="strong match",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            threshold = topic_map["low_confidence_threshold"]
+            episodes = {
+                ep["youtube_video_id"]: ep
+                for ep in topic_map["topics"][0]["episodes"]
+            }
+
+            self.assertEqual(
+                _low_confidence_class(episodes["vidLow"]["confidence"], threshold),
+                "low",
+            )
+            self.assertEqual(
+                _low_confidence_class(episodes["vidMid"]["confidence"], threshold),
+                "",
+            )
+            self.assertEqual(
+                _low_confidence_class(episodes["vidHigh"]["confidence"], threshold),
+                "",
+            )
+
+    def test_html_uses_payload_threshold_not_hardcoded_dual_thresholds(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("low_confidence_threshold", html)
+        self.assertNotIn("0.33", html)
+        self.assertNotIn("0.66", html)
+        self.assertNotIn("very-low", html)
+
+    def test_html_defines_low_confidence_episode_style(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn(".discovery-episode.low", html)
+
+    def test_ui_revision_advances_for_low_confidence_threshold(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("discovery", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()
