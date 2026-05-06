@@ -27,6 +27,40 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 6: tick persist-to-junction-tables at slice-02 scope
+
+### Done (doc-only, no code change)
+- Ticked ROADMAP §A2 line 74 ("Persist to `topics`, `subtopics`, junction
+  tables, `discovery_runs`") at slice-02 scope. `run_discovery` already
+  persists the slice-02 surface — `topics` + `video_topics` +
+  `discovery_runs` (success + errored), confidence/reason default to
+  1.0/"" since the slice-02 prompt schema rejects those keys.
+  `subtopics` / `video_subtopics` deliberately stay empty in slice 02
+  and ship in slices 03–05 as the schema widens. Mirrors the iteration 4
+  pattern (parenthetical noting deferred scope).
+
+### Learned
+- §A2 is now fully ticked at slice-02 scope. Issue 02 acceptance
+  criteria still has three open items: real-LLM smoke run on a 10-20
+  episode channel, "credible topic list" credibility check, and
+  cost-tracking note. All three require actually calling the real LLM,
+  which is HITL trigger #1 (the verify gate must not spend tokens). The
+  loop should pause here for human review per PROMPT.md instruction #3
+  ("no unchecked checkbox remains in those sections but the issue's
+  acceptance criteria are not all met").
+- `make_real_llm_callable` (iter 3) already raises unless
+  `RALPH_ALLOW_REAL_LLM=1` is set, so the pause gate is enforced in
+  code, not just the harness.
+
+### Next
+- HITL: a human runs `RALPH_ALLOW_REAL_LLM=1` against a real channel
+  (Diary of a CEO, 10-20 episodes), captures token + cost numbers, and
+  records them somewhere durable (likely a new line in this WORKLOG or
+  an issue 02 acceptance-evidence note in `.scratch/`). After that the
+  remaining issue 02 boxes can be ticked and the branch is COMPLETE.
+
+---
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 5: errored-run path on llm failure
 
 ### Done (TDD, 2 new tests in `test_discovery.py`)
