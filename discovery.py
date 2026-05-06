@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,11 +10,70 @@ from yt_channel_analyzer.db import connect, ensure_schema
 
 
 @dataclass(frozen=True)
+class Chapter:
+    start_seconds: int
+    title: str
+
+
+@dataclass(frozen=True)
 class DiscoveryVideo:
     youtube_video_id: str
     title: str
     description: str | None
     published_at: str | None
+    chapters: tuple[Chapter, ...] = ()
+
+
+_CHAPTER_LINE = re.compile(r"^\s*\[?((?:\d+:)?\d{1,2}:\d{2})\]?\s+[-–—:|.)\]]?\s*(.+?)\s*$")
+
+
+def _timestamp_to_seconds(ts: str) -> int | None:
+    parts = ts.split(":")
+    try:
+        nums = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if len(nums) == 2:
+        m, s = nums
+        if not (0 <= s < 60 and m >= 0):
+            return None
+        return m * 60 + s
+    if len(nums) == 3:
+        h, m, s = nums
+        if not (0 <= s < 60 and 0 <= m < 60 and h >= 0):
+            return None
+        return h * 3600 + m * 60 + s
+    return None
+
+
+def parse_chapters_from_description(description: str | None) -> tuple[Chapter, ...]:
+    """Extract chapter markers from a YouTube video description.
+
+    YouTube treats a description as containing chapters when at least three
+    timestamps are present, the first is `0:00`, and they are monotonically
+    increasing. We follow the same rule conservatively — if any check fails,
+    return an empty tuple so downstream code never sees half-parsed chapters.
+    """
+    if not description:
+        return ()
+    candidates: list[Chapter] = []
+    for line in description.splitlines():
+        match = _CHAPTER_LINE.match(line)
+        if not match:
+            continue
+        ts, title = match.group(1), match.group(2).strip()
+        seconds = _timestamp_to_seconds(ts)
+        if seconds is None or not title:
+            continue
+        candidates.append(Chapter(start_seconds=seconds, title=title))
+    if len(candidates) < 3:
+        return ()
+    if candidates[0].start_seconds != 0:
+        return ()
+    for prev, curr in zip(candidates, candidates[1:]):
+        if curr.start_seconds <= prev.start_seconds:
+            return ()
+    return tuple(candidates)
 
 
 @dataclass(frozen=True)
@@ -103,6 +163,7 @@ def run_discovery(
                 title=row["title"],
                 description=row["description"],
                 published_at=row["published_at"],
+                chapters=parse_chapters_from_description(row["description"]),
             )
             for row in video_rows
         ]

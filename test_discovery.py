@@ -442,6 +442,157 @@ class StubDiscoveryRunTests(unittest.TestCase):
             self.assertEqual(vid1_health["discovery_run_id"], run_id)
 
 
+class ChapterParsingTests(unittest.TestCase):
+    def test_parses_typical_doac_style_description(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            Chapter,
+            parse_chapters_from_description,
+        )
+
+        description = (
+            "In this episode we cover sleep.\n"
+            "\n"
+            "0:00 Intro\n"
+            "2:15 Why sleep matters\n"
+            "15:42 Practical tips\n"
+            "1:02:30 Wrap up\n"
+            "\n"
+            "Sponsored by Acme."
+        )
+        chapters = parse_chapters_from_description(description)
+        self.assertEqual(
+            chapters,
+            (
+                Chapter(0, "Intro"),
+                Chapter(135, "Why sleep matters"),
+                Chapter(942, "Practical tips"),
+                Chapter(3750, "Wrap up"),
+            ),
+        )
+
+    def test_returns_empty_when_description_missing(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        self.assertEqual(parse_chapters_from_description(None), ())
+        self.assertEqual(parse_chapters_from_description(""), ())
+
+    def test_returns_empty_when_fewer_than_three_timestamps(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:00 Intro\n3:00 Outro\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_returns_empty_when_first_timestamp_is_not_zero(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:30 Hello\n2:00 Middle\n5:00 End\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_returns_empty_when_timestamps_not_monotonic(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:00 Intro\n5:00 Middle\n3:00 Backwards\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_skips_lines_without_timestamps(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            Chapter,
+            parse_chapters_from_description,
+        )
+
+        description = (
+            "Some prose without a timestamp.\n"
+            "0:00 Intro\n"
+            "Another prose line.\n"
+            "1:00 Topic A\n"
+            "2:00 Topic B\n"
+        )
+        chapters = parse_chapters_from_description(description)
+        self.assertEqual(
+            chapters,
+            (
+                Chapter(0, "Intro"),
+                Chapter(60, "Topic A"),
+                Chapter(120, "Topic B"),
+            ),
+        )
+
+
+class DiscoveryVideoChaptersTests(unittest.TestCase):
+    def test_run_discovery_passes_parsed_chapters_to_llm(self) -> None:
+        from yt_channel_analyzer.discovery import Chapter
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            init_db(
+                db_path,
+                project_name="proj",
+                channel_id="UC123",
+                channel_title="Channel",
+                channel_handle="@channel",
+            )
+            chapter_desc = (
+                "0:00 Intro\n"
+                "1:30 Sleep cycles\n"
+                "10:00 Q&A\n"
+            )
+            upsert_videos_for_primary_channel(
+                db_path,
+                videos=[
+                    VideoMetadata(
+                        youtube_video_id="vid1",
+                        title="With chapters",
+                        description=chapter_desc,
+                        published_at="2026-04-05T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                    VideoMetadata(
+                        youtube_video_id="vid2",
+                        title="No chapters",
+                        description="just prose",
+                        published_at="2026-04-06T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                ],
+            )
+
+            seen_videos: list = []
+
+            def capturing_llm(videos):
+                seen_videos.extend(videos)
+                return DiscoveryPayload(
+                    topics=["General"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id=v.youtube_video_id,
+                            topic_name="General",
+                            confidence=1.0,
+                            reason="r",
+                        )
+                        for v in videos
+                    ],
+                )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=capturing_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            by_id = {v.youtube_video_id: v for v in seen_videos}
+            self.assertEqual(
+                by_id["vid1"].chapters,
+                (
+                    Chapter(0, "Intro"),
+                    Chapter(90, "Sleep cycles"),
+                    Chapter(600, "Q&A"),
+                ),
+            )
+            self.assertEqual(by_id["vid2"].chapters, ())
+
+
 class StubLLMTests(unittest.TestCase):
     def test_stub_llm_returns_one_topic_covering_all_videos(self) -> None:
         from yt_channel_analyzer.discovery import DiscoveryVideo

@@ -27,6 +27,43 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 1: pull chapter markers into discovery videos
+
+### Done (TDD, 7 new tests in `test_discovery.py`)
+- New `Chapter(start_seconds, title)` frozen dataclass exported from
+  `discovery.py`. New `parse_chapters_from_description(description)` helper
+  that follows YouTube's chapter-recognition rules conservatively: ≥3
+  timestamped lines, first timestamp is `0:00`, timestamps strictly
+  monotonically increasing. If any check fails, returns an empty tuple
+  rather than half-parsed chapters.
+- `DiscoveryVideo` gained a `chapters: tuple[Chapter, ...] = ()` field
+  (default empty so existing `DiscoveryVideo(...)` constructors keep
+  working). `run_discovery` now populates `chapters` per video by parsing
+  the description, so the LLM callable receives titles + descriptions +
+  chapters as the issue 02 sub-plan calls for.
+- No schema change — chapters are derived per discovery run from the
+  existing `videos.description` column. YouTube Data API doesn't return
+  chapters as a separate field anyway; they live inside descriptions.
+
+### Learned
+- The minimal helper accepts a few stylistic variants (leading bullets,
+  bracketed timestamps, an optional separator) but keeps the YouTube
+  validity rules strict, so a description with two stray timestamps in
+  prose won't be misread as chapter markers. Ad-read sponsor blocks
+  with `0:00` Intro-style chapters still parse cleanly.
+- Defaulting `chapters=()` keeps the existing `StubLLMTests` and
+  `_seed_channel_with_videos` test fixtures intact — no churn outside
+  the new tests.
+
+### Next
+- Pre-filter common boilerplate (sponsor reads, social CTAs) from
+  descriptions before they're handed to the LLM. Parsed chapters are
+  the natural anchor for "trim everything below the last chapter line"
+  if we want to be aggressive; otherwise a regex-based filter for
+  common ad-read tells.
+
+---
+
 ## 2026-05-06 — Issue 09 / Ralph iteration 14: document sort-persistence decision
 
 ### Done (docs only — no code)
