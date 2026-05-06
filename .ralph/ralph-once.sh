@@ -39,6 +39,14 @@ if [[ -f "$OVERLAY" ]]; then
   echo "ralph-once: applied overlay $OVERLAY"
 fi
 
+# Inner-agent allowlist for the four sandbox-blocked operations the
+# iteration contract requires. Without these, the inner `claude -p` is
+# forced into HITL_PAUSE on commit/verify even when its work is correct.
+# Discovered during the issue-07 validation run; see project_ralph_harness
+# memory for the inner-side vs wrapper-side decision rationale.
+INNER_ALLOWED_TOOLS="Bash(git add *) Bash(git commit *) Bash(git restore *) Bash(.ralph/verify.sh*)"
+
 claude \
   --permission-mode acceptEdits \
+  --allowedTools "$INNER_ALLOWED_TOOLS" \
   -p "@${RENDERED} Run one Ralph iteration as specified in the rendered prompt above. End your response with the appropriate <ralph>...</ralph> status sigil."
