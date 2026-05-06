@@ -27,6 +27,43 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 2: strip description boilerplate before LLM
+
+### Done (TDD, 8 new tests in `test_discovery.py`)
+- New `strip_description_boilerplate(description)` in `discovery.py`. Line-
+  based regex filter that drops sponsor reads ("Sponsored by", "Brought to
+  you by", "Sponsors:", "Use code … for X% off"), subscribe/like/bell
+  CTAs, "Follow me on …" lines, social-platform label lines (`Twitter:`,
+  `Instagram:`), bare social/podcast URLs (instagram, twitter/x, tiktok,
+  facebook, linkedin, threads, patreon, discord, youtube/youtu.be,
+  spotify, apple), and "Listen on …" / "Available on …" CTAs. Chapter-
+  marker lines (matched by the existing `_CHAPTER_LINE` regex) are always
+  kept so episode structure still reaches the LLM.
+- `run_discovery` now sets `DiscoveryVideo.description` to the cleaned
+  text. `chapters` is still parsed from the original description so the
+  filter can't accidentally elide structure even if a chapter title
+  happens to mention a sponsor.
+- Returns `None` for `None` input, `""` for empty input, possibly `""`
+  if the entire description was boilerplate. Consecutive blank lines
+  collapsed and leading/trailing blanks trimmed.
+
+### Learned
+- Patterns ending in `\b` after `:` don't match line-final colons because
+  `:` is non-word and there's no following word char. Split the
+  `Sponsors:` rule into its own pattern (`\bsponsors?:`) without a
+  trailing `\b`. Caught by the `test_strips_sponsor_read_lines` red.
+- The boilerplate filter is intentionally aggressive — over-filter beats
+  under-filter for Phase A discovery, where a sponsor brand leaking into
+  the LLM context could nucleate a phantom topic.
+
+### Next
+- Build the single batched LLM call (Haiku 4.5 / GPT-4o-mini). HITL
+  trigger #1 — adding a real-LLM call site means the next iteration
+  must wrap it with the `RALPH_ALLOW_REAL_LLM=1` env-var guard and
+  raise without it; the verify gate must still pass with the env unset.
+
+---
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 1: pull chapter markers into discovery videos
 
 ### Done (TDD, 7 new tests in `test_discovery.py`)

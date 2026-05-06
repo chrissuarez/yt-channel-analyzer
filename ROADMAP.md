@@ -67,7 +67,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Stub LLM (`stub_llm` returns one topic "General" with every video assigned, confidence=1.0); constants `STUB_MODEL` / `STUB_PROMPT_VERSION`
 - [x] CLI `discover --db-path --project-name --stub` wired to `run_discovery` (the `--stub` flag is required until the real LLM lands)
 - [x] Pull all videos for the channel: title, description, chapter markers (Ralph iteration 1 — `Chapter` dataclass + `parse_chapters_from_description` in `discovery.py`; chapters parsed from description text using YouTube's own rules: ≥3 timestamps, first is 0:00, monotonically increasing; populated on `DiscoveryVideo.chapters` so the LLM callable receives them. No schema change — chapters are derived per run from the existing `videos.description` column.)
-- [ ] Pre-filter common boilerplate (sponsor reads, social calls-to-action) from descriptions
+- [x] Pre-filter common boilerplate (sponsor reads, social calls-to-action) from descriptions (Ralph iteration 2 — `strip_description_boilerplate` in `discovery.py` drops sponsor-read and social-CTA lines via line-by-line regex; `_CHAPTER_LINE` matches are always preserved so episode structure still reaches the LLM. `run_discovery` applies it to `DiscoveryVideo.description` while `chapters` are still parsed from the original description.)
 - [ ] Build a single batched LLM call (Haiku 4.5 or GPT-4o-mini)
 - [ ] Prompt produces: list of broad topics with subtopics, plus per-episode topic/subtopic assignments with confidence (0.0–1.0) and a short reason string
 - [ ] Validate response shape; reject malformed batches; retry once

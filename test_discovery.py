@@ -518,6 +518,167 @@ class ChapterParsingTests(unittest.TestCase):
         )
 
 
+class DescriptionBoilerplateTests(unittest.TestCase):
+    def test_returns_none_and_empty_unchanged(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        self.assertIsNone(strip_description_boilerplate(None))
+        self.assertEqual(strip_description_boilerplate(""), "")
+
+    def test_strips_subscribe_cta(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "We talk about deep work and habits.\n"
+            "Don't forget to subscribe to the channel!\n"
+            "Hit the bell for more.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "We talk about deep work and habits.")
+
+    def test_strips_sponsor_read_lines(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "An episode about sleep science.\n"
+            "\n"
+            "Sponsors:\n"
+            "This episode is sponsored by Acme.\n"
+            "Use code DOAC for 20% off your first order.\n"
+            "\n"
+            "More episodes coming soon.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(
+            cleaned,
+            "An episode about sleep science.\n\nMore episodes coming soon.",
+        )
+
+    def test_strips_social_handles_and_urls(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Today we discuss habit formation.\n"
+            "Follow me on Twitter for daily threads.\n"
+            "Instagram: @host\n"
+            "https://www.instagram.com/host\n"
+            "Listen on Apple Podcasts.\n"
+            "https://open.spotify.com/show/abc\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "Today we discuss habit formation.")
+
+    def test_preserves_chapter_lines_even_if_they_look_promotional(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "0:00 Intro\n"
+            "5:00 Sponsors and what we cover today\n"
+            "12:00 Wrap up\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(
+            cleaned,
+            "0:00 Intro\n5:00 Sponsors and what we cover today\n12:00 Wrap up",
+        )
+
+    def test_collapses_consecutive_blank_lines_after_filtering(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Episode notes.\n"
+            "\n"
+            "Sponsored by Acme.\n"
+            "Use code SAVE10.\n"
+            "\n"
+            "More notes here.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "Episode notes.\n\nMore notes here.")
+
+    def test_returns_empty_when_entire_description_is_boilerplate(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Subscribe to the channel.\n"
+            "Follow me on Twitter.\n"
+            "https://www.instagram.com/host\n"
+        )
+        self.assertEqual(strip_description_boilerplate(description), "")
+
+    def test_run_discovery_passes_filtered_description_but_original_chapters(self) -> None:
+        from yt_channel_analyzer.discovery import Chapter
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            init_db(
+                db_path,
+                project_name="proj",
+                channel_id="UC123",
+                channel_title="Channel",
+                channel_handle="@channel",
+            )
+            description = (
+                "0:00 Intro\n"
+                "1:30 Topic A\n"
+                "10:00 Topic B\n"
+                "\n"
+                "Sponsored by Acme. Use code SAVE10 for 15% off.\n"
+                "Follow me on Twitter for more.\n"
+                "https://www.instagram.com/host\n"
+            )
+            upsert_videos_for_primary_channel(
+                db_path,
+                videos=[
+                    VideoMetadata(
+                        youtube_video_id="vid1",
+                        title="With chapters and sponsors",
+                        description=description,
+                        published_at="2026-04-05T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                ],
+            )
+
+            seen: list = []
+
+            def capturing_llm(videos):
+                seen.extend(videos)
+                return DiscoveryPayload(
+                    topics=["General"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id=v.youtube_video_id,
+                            topic_name="General",
+                            confidence=1.0,
+                            reason="r",
+                        )
+                        for v in videos
+                    ],
+                )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=capturing_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            video = seen[0]
+            self.assertNotIn("Sponsored by", video.description or "")
+            self.assertNotIn("Follow me on Twitter", video.description or "")
+            self.assertNotIn("instagram.com", video.description or "")
+            self.assertEqual(
+                video.chapters,
+                (
+                    Chapter(0, "Intro"),
+                    Chapter(90, "Topic A"),
+                    Chapter(600, "Topic B"),
+                ),
+            )
+
+
 class DiscoveryVideoChaptersTests(unittest.TestCase):
     def test_run_discovery_passes_parsed_chapters_to_llm(self) -> None:
         from yt_channel_analyzer.discovery import Chapter

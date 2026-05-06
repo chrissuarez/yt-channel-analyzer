@@ -46,6 +46,93 @@ def _timestamp_to_seconds(ts: str) -> int | None:
     return None
 
 
+_BOILERPLATE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Sponsor reads
+    re.compile(
+        r"\b(?:sponsored by|brought to you by|today'?s sponsor|our sponsors?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bsponsors?:", re.IGNORECASE),
+    re.compile(
+        r"\b(use (?:promo |discount )?code|promo code|discount code|coupon code|\d+\s?%\s?off)\b",
+        re.IGNORECASE,
+    ),
+    # Subscribe / like / bell CTAs
+    re.compile(
+        r"\b(subscribe to (?:the|my|our|this)|hit (?:the )?bell|smash that like|"
+        r"don'?t forget to (?:like|subscribe)|leave (?:a|us a) (?:like|comment|review))\b",
+        re.IGNORECASE,
+    ),
+    # Follow-on-social CTAs
+    re.compile(
+        r"\b(follow (?:me|us|the show|the host) on|find (?:me|us|the show) on|"
+        r"connect with (?:me|us) on)\b",
+        re.IGNORECASE,
+    ),
+    # Lines that start with a social-platform label, e.g. "Twitter: @doac"
+    re.compile(
+        r"^\s*(?:instagram|twitter|tiktok|facebook|linkedin|threads|youtube|"
+        r"patreon|discord|substack|x|website|newsletter)\s*[:\-–—]",
+        re.IGNORECASE,
+    ),
+    # Bare URLs to social / podcast platforms
+    re.compile(
+        r"https?://(?:www\.)?(?:instagram\.com|twitter\.com|x\.com|tiktok\.com|"
+        r"facebook\.com|linkedin\.com|threads\.net|patreon\.com|discord\.gg|"
+        r"discord\.com|youtube\.com|youtu\.be|open\.spotify\.com|spotify\.com|"
+        r"apple\.co|podcasts\.apple\.com)\b",
+        re.IGNORECASE,
+    ),
+    # "Listen on …" / "Available on …" CTAs
+    re.compile(
+        r"\b(listen on (?:apple|spotify|amazon)|available on (?:apple|spotify|amazon))\b",
+        re.IGNORECASE,
+    ),
+)
+
+
+def _is_boilerplate_line(line: str) -> bool:
+    return any(pattern.search(line) for pattern in _BOILERPLATE_PATTERNS)
+
+
+def strip_description_boilerplate(description: str | None) -> str | None:
+    """Drop sponsor-read and social-CTA lines from a YouTube description.
+
+    Chapter-marker lines (per `parse_chapters_from_description`'s line shape)
+    are always preserved so the LLM still sees the episode's structure.
+    Returns `None` for `None` input; otherwise returns a string that may be
+    empty if the entire description was boilerplate.
+    """
+    if description is None:
+        return None
+    if not description:
+        return description
+    cleaned: list[str] = []
+    for line in description.splitlines():
+        if _CHAPTER_LINE.match(line):
+            cleaned.append(line)
+            continue
+        if _is_boilerplate_line(line):
+            continue
+        cleaned.append(line)
+    collapsed: list[str] = []
+    blank = False
+    for line in cleaned:
+        if not line.strip():
+            if blank:
+                continue
+            blank = True
+            collapsed.append("")
+        else:
+            blank = False
+            collapsed.append(line)
+    while collapsed and not collapsed[0].strip():
+        collapsed.pop(0)
+    while collapsed and not collapsed[-1].strip():
+        collapsed.pop()
+    return "\n".join(collapsed)
+
+
 def parse_chapters_from_description(description: str | None) -> tuple[Chapter, ...]:
     """Extract chapter markers from a YouTube video description.
 
@@ -161,7 +248,7 @@ def run_discovery(
             DiscoveryVideo(
                 youtube_video_id=row["youtube_video_id"],
                 title=row["title"],
-                description=row["description"],
+                description=strip_description_boilerplate(row["description"]),
                 published_at=row["published_at"],
                 chapters=parse_chapters_from_description(row["description"]),
             )
