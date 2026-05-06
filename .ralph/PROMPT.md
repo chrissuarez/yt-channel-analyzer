@@ -45,13 +45,11 @@ will outlive this iteration; corners cut here will be cut again.
    reversible.
 6. Run the verify gate before committing:
    ```
-   cd "$(git rev-parse --show-toplevel)/.." \
-     && python3 -m unittest \
-          yt_channel_analyzer.test_discovery \
-          yt_channel_analyzer.test_extractor
+   .ralph/verify.sh
    ```
    (The driver re-runs this after you exit; running it yourself catches
-   problems faster.)
+   problems faster. The script `cd`s to the parent dir and runs the
+   default unittest targets — override with positional args if needed.)
 7. If anything fails, fix it in the same iteration. Do not commit broken
    work. If you cannot fix it within this iteration, emit
    `<ralph>BLOCKED: <one-line reason></ralph>` and exit without committing.
@@ -103,8 +101,8 @@ what unattended runs are for.
 - Do **not** push to remote, force-push, or merge to `main`.
 - Do **not** edit governance docs (HITL trigger #5 above).
 - Do **not** delete or skip tests.
-- Use `python3` (no `.venv` here). Tests run from the parent directory:
-  `cd "$(git rev-parse --show-toplevel)/.." && python3 -m unittest <targets>`.
+- Use `python3` (no `.venv` here). Tests run from the parent directory;
+  `.ralph/verify.sh` handles the cd + unittest invocation.
 - Active code lives in the repo root. `legacy/` (when it exists) is
   archive-only — don't add new code to it.
 - Leave fields blank rather than inventing values.

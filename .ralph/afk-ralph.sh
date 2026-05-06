@@ -107,7 +107,7 @@ render_prompt() {
 
 verify_gate() {
   echo "afk-ralph: verify gate — running unittest (${RALPH_VERIFY_TARGETS})"
-  ( cd .. && python3 -m unittest -q ${RALPH_VERIFY_TARGETS} )
+  RALPH_VERIFY_TARGETS="${RALPH_VERIFY_TARGETS}" .ralph/verify.sh
 }
 
 # Pre-flight 2: verify gate must be green before iteration 1.
@@ -136,8 +136,12 @@ for ((i = 1; i <= MAX_ITER; i++)); do
   fi
 
   set +e
+  # Inner-agent allowlist for the four sandbox-blocked operations the
+  # iteration contract requires. See ralph-once.sh for rationale.
+  INNER_ALLOWED_TOOLS="Bash(git add *) Bash(git commit *) Bash(git restore *) Bash(.ralph/verify.sh*)"
   claude \
     --permission-mode acceptEdits \
+    --allowedTools "$INNER_ALLOWED_TOOLS" \
     --output-format stream-json \
     --verbose \
     -p "@${RENDERED} Run one Ralph iteration as specified in the rendered prompt above. End your response with the appropriate <ralph>...</ralph> status sigil." \
