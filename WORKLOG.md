@@ -27,6 +27,20 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / smoke run on DOAC + fence-strip fix in `_parse`
+
+### Done
+- HITL smoke test: ingested 15 DOAC episodes, ran `make_real_llm_callable()` against Claude Haiku 4.5. End-to-end success on second attempt.
+- First attempt failed: Haiku returned valid JSON but wrapped in ```` ```json ... ``` ```` fences despite explicit "no markdown fences" prompt directive. Added `_strip_code_fence` in `extractor/runner.py`'s `_parse`. Three new tests in `FenceStripTests` (fenced/bare-fenced/unfenced).
+- Cost note (issue 02 AC): 15 episodes / 1 batched call / 8,528 input + 689 output tokens / 6.9s wall / **$0.0120** at Haiku 4.5 pricing ($1/M in, $5/M out). Topics produced were credible (Sexual Health, AI, Wealth, Neuroscience, etc.) — see commit body for the full set.
+
+### Learned
+- "Output JSON only — no fences" in the system prompt is not sufficient on Haiku; treat fenced output as the expected case and strip defensively.
+- Slice-02 schema doesn't carry confidence, so all assignments land at the parser's default 1.0. Per spec — confidence ships in slice 04.
+
+### Next
+- CLI still requires `--stub` for `discover`/`analyze`. Adding a `--real` path is a small follow-up (file under §A5 or spin a tiny issue 02b — not blocking the merge).
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 6: tick persist-to-junction-tables at slice-02 scope
 
 ### Done (doc-only, no code change)

@@ -34,9 +34,22 @@ def _content_hash(prompt: Prompt, rendered: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _strip_code_fence(raw_text: str) -> str:
+    text = raw_text.strip()
+    if not text.startswith("```"):
+        return raw_text
+    first_newline = text.find("\n")
+    if first_newline == -1:
+        return raw_text
+    body = text[first_newline + 1 :]
+    if body.endswith("```"):
+        body = body[:-3]
+    return body.strip()
+
+
 def _parse(raw_text: str, schema: dict) -> dict:
     try:
-        data = json.loads(raw_text)
+        data = json.loads(_strip_code_fence(raw_text))
     except json.JSONDecodeError as exc:
         raise SchemaValidationError(f"response was not valid JSON: {exc}") from exc
     validate(data, schema)

@@ -1,6 +1,6 @@
 # 02 — Real LLM discovery replaces the stub
 
-Status: needs-triage
+Status: ready-for-human
 Type: AFK
 User stories covered: 2, 19
 Roadmap sections: §A2
@@ -19,13 +19,13 @@ Subtopics, confidence, multi-topic, and reason fields stay out — they ship in 
 
 ## Acceptance criteria
 
-- [ ] `discovery.py` makes a real batched LLM call (provider configured via env var; model defaulted to a cheap one)
-- [ ] Prompt is assembled from titles + descriptions + chapter markers; basic boilerplate (sponsor reads, common CTAs) pre-filtered from descriptions
-- [ ] Response is validated against an expected JSON schema; one retry on parse failure; on second failure the run is marked errored and no partial state is persisted
-- [ ] `discovery_runs.prompt_version` is populated
-- [ ] Smoke test on a small real channel (10–20 episodes) produces a credible topic list
-- [ ] Cost-tracking note recorded somewhere (run cost, token count) for later reference
-- [ ] Unit tests for the discovery module use canned LLM responses (don't hit the real API in CI)
+- [x] `discovery.py` makes a real batched LLM call (provider configured via env var; model defaulted to a cheap one)
+- [x] Prompt is assembled from titles + descriptions + chapter markers; basic boilerplate (sponsor reads, common CTAs) pre-filtered from descriptions
+- [x] Response is validated against an expected JSON schema; one retry on parse failure; on second failure the run is marked errored and no partial state is persisted
+- [x] `discovery_runs.prompt_version` is populated
+- [x] Smoke test on a small real channel (10–20 episodes) produces a credible topic list
+- [x] Cost-tracking note recorded somewhere (run cost, token count) for later reference
+- [x] Unit tests for the discovery module use canned LLM responses (don't hit the real API in CI)
 
 ## Blocked by
 
