@@ -21,6 +21,7 @@ from yt_channel_analyzer.discovery import (
     run_discovery,
     stub_llm,
 )
+from yt_channel_analyzer.extractor import FakeLLMRunner, registry as _registry_module
 from yt_channel_analyzer.youtube import ChannelMetadata, VideoMetadata
 
 
@@ -3064,6 +3065,259 @@ class DiscoveryLowConfidenceThresholdTests(unittest.TestCase):
         from yt_channel_analyzer.review_ui import UI_REVISION
 
         self.assertIn("discovery", UI_REVISION)
+
+
+class _RegistryIsolation(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved = dict(_registry_module._PROMPTS)
+        _registry_module._PROMPTS.clear()
+
+    def tearDown(self) -> None:
+        _registry_module._PROMPTS.clear()
+        _registry_module._PROMPTS.update(self._saved)
+
+
+class DiscoveryPromptRegistrationTests(_RegistryIsolation):
+    def test_register_discovery_prompt_is_idempotent(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            register_discovery_prompt,
+        )
+
+        first = register_discovery_prompt()
+        second = register_discovery_prompt()
+        self.assertEqual(first.name, DISCOVERY_PROMPT_NAME)
+        self.assertEqual(first.version, DISCOVERY_PROMPT_VERSION)
+        self.assertIs(first, second)
+
+    def test_render_includes_titles_descriptions_and_chapters(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+
+        prompt = register_discovery_prompt()
+        rendered = prompt.render(
+            {
+                "videos": [
+                    {
+                        "youtube_video_id": "vidA",
+                        "title": "Sleep and the brain",
+                        "description": "how sleep works",
+                        "chapters": ["0: Intro", "120: Deep sleep"],
+                    },
+                    {
+                        "youtube_video_id": "vidB",
+                        "title": "Building a startup",
+                        "description": None,
+                        "chapters": [],
+                    },
+                ]
+            }
+        )
+        self.assertIn("vidA", rendered)
+        self.assertIn("Sleep and the brain", rendered)
+        self.assertIn("how sleep works", rendered)
+        self.assertIn("Intro", rendered)
+        self.assertIn("Deep sleep", rendered)
+        self.assertIn("vidB", rendered)
+        self.assertIn("Building a startup", rendered)
+
+    def test_schema_accepts_topics_and_assignments(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        validate(
+            {
+                "topics": ["Health"],
+                "assignments": [
+                    {"youtube_video_id": "vidA", "topic": "Health"},
+                ],
+            },
+            prompt.schema,
+        )
+
+    def test_schema_rejects_missing_topics(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {"assignments": []},
+                prompt.schema,
+            )
+
+    def test_schema_rejects_assignment_with_extra_keys(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "subtopic": "Sleep",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+
+class ExtractorBackedLLMTests(_RegistryIsolation):
+    def test_callable_round_trips_payload_via_extractor(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        register_discovery_prompt()
+        runner = FakeLLMRunner()
+        runner.add_response(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            {
+                "topics": ["Health", "Business"],
+                "assignments": [
+                    {"youtube_video_id": "vid1", "topic": "Health"},
+                    {"youtube_video_id": "vid2", "topic": "Business"},
+                ],
+            },
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                extractor = Extractor(connection=conn, runner=runner)
+                callable = discovery_llm_via_extractor(extractor)
+                videos = [
+                    DiscoveryVideo(
+                        youtube_video_id="vid1",
+                        title="Sleep",
+                        description="how sleep works",
+                        published_at=None,
+                    ),
+                    DiscoveryVideo(
+                        youtube_video_id="vid2",
+                        title="Founders",
+                        description="building",
+                        published_at=None,
+                    ),
+                ]
+                payload = callable(videos)
+
+        self.assertEqual(payload.topics, ["Health", "Business"])
+        ids = {(a.youtube_video_id, a.topic_name) for a in payload.assignments}
+        self.assertEqual(
+            ids, {("vid1", "Health"), ("vid2", "Business")}
+        )
+        # Slice 02 produces broad topics + single topic per episode only.
+        # confidence/reason are placeholders until later slices.
+        for a in payload.assignments:
+            self.assertEqual(a.confidence, 1.0)
+            self.assertEqual(a.reason, "")
+
+    def test_render_serializes_videos_into_one_prompt(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        register_discovery_prompt()
+        runner = FakeLLMRunner()
+        runner.add_response(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            {
+                "topics": ["T"],
+                "assignments": [{"youtube_video_id": "vidX", "topic": "T"}],
+            },
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                extractor = Extractor(connection=conn, runner=runner)
+                callable = discovery_llm_via_extractor(extractor)
+                callable(
+                    [
+                        DiscoveryVideo(
+                            youtube_video_id="vidX",
+                            title="Hello",
+                            description="world",
+                            published_at=None,
+                        )
+                    ]
+                )
+
+        # Single batched call: one extractor invocation regardless of video count.
+        self.assertEqual(len(runner.calls), 1)
+        rendered = runner.calls[0].rendered_prompt
+        self.assertIn("vidX", rendered)
+        self.assertIn("Hello", rendered)
+        self.assertIn("world", rendered)
+
+
+class RealLLMGuardTests(_RegistryIsolation):
+    def test_make_real_llm_callable_requires_env_var(self) -> None:
+        import os
+
+        from yt_channel_analyzer.discovery import make_real_llm_callable
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                prior = os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                try:
+                    with self.assertRaises(RuntimeError) as ctx:
+                        make_real_llm_callable(conn)
+                    self.assertIn(
+                        "RALPH_ALLOW_REAL_LLM", str(ctx.exception)
+                    )
+                finally:
+                    if prior is not None:
+                        os.environ["RALPH_ALLOW_REAL_LLM"] = prior
+
+    def test_make_real_llm_callable_rejects_zero_value(self) -> None:
+        import os
+
+        from yt_channel_analyzer.discovery import make_real_llm_callable
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                prior = os.environ.get("RALPH_ALLOW_REAL_LLM")
+                os.environ["RALPH_ALLOW_REAL_LLM"] = "0"
+                try:
+                    with self.assertRaises(RuntimeError):
+                        make_real_llm_callable(conn)
+                finally:
+                    if prior is None:
+                        os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                    else:
+                        os.environ["RALPH_ALLOW_REAL_LLM"] = prior
 
 
 if __name__ == "__main__":

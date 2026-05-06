@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from yt_channel_analyzer.db import connect, ensure_schema
+from yt_channel_analyzer.extractor.errors import ExtractorError
+from yt_channel_analyzer.extractor.registry import (
+    Prompt,
+    get_prompt,
+    register_prompt,
+)
 
 
 @dataclass(frozen=True)
@@ -183,6 +190,165 @@ LLMCallable = Callable[[Sequence[DiscoveryVideo]], DiscoveryPayload]
 STUB_TOPIC_NAME = "General"
 STUB_MODEL = "stub"
 STUB_PROMPT_VERSION = "stub-v0"
+
+
+DISCOVERY_PROMPT_NAME = "discovery.topics"
+DISCOVERY_PROMPT_VERSION = "discovery-v1"
+
+
+_DISCOVERY_SYSTEM = (
+    "You are an editorial assistant grouping podcast episodes into broad "
+    "topics from titles, descriptions, and chapter markers.\n"
+    "\n"
+    "Reply with a single JSON object of the form:\n"
+    '  {"topics": ["Topic A", "Topic B"], '
+    '"assignments": [{"youtube_video_id": "<id>", "topic": "Topic A"}]}\n'
+    "\n"
+    "Rules:\n"
+    "- Every supplied episode must appear exactly once in `assignments`.\n"
+    "- Every `topic` in `assignments` must also appear in `topics`.\n"
+    "- Choose 3-12 broad topics; reuse one topic across many episodes.\n"
+    "- Output JSON only — no prose, no markdown fences."
+)
+
+
+_DISCOVERY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["topics", "assignments"],
+    "properties": {
+        "topics": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+        },
+        "assignments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["youtube_video_id", "topic"],
+                "properties": {
+                    "youtube_video_id": {"type": "string"},
+                    "topic": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+def _render_discovery_prompt(context: dict) -> str:
+    videos = context.get("videos", [])
+    lines: list[str] = [
+        f"Episodes ({len(videos)} total). Identify broad topics and assign each.",
+        "",
+    ]
+    for idx, video in enumerate(videos, start=1):
+        lines.append(f"--- Episode {idx} ---")
+        lines.append(f"id: {video['youtube_video_id']}")
+        lines.append(f"title: {video['title']}")
+        description = video.get("description")
+        if description:
+            lines.append(f"description: {description}")
+        chapters = video.get("chapters") or []
+        if chapters:
+            lines.append("chapters:")
+            for chapter in chapters:
+                lines.append(f"  - {chapter}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def register_discovery_prompt() -> Prompt:
+    """Register the discovery prompt; idempotent across repeat calls."""
+    try:
+        return get_prompt(DISCOVERY_PROMPT_NAME, DISCOVERY_PROMPT_VERSION)
+    except ExtractorError:
+        return register_prompt(
+            name=DISCOVERY_PROMPT_NAME,
+            version=DISCOVERY_PROMPT_VERSION,
+            render=_render_discovery_prompt,
+            schema=_DISCOVERY_SCHEMA,
+            system=_DISCOVERY_SYSTEM,
+        )
+
+
+def _videos_to_context(videos: Sequence[DiscoveryVideo]) -> dict:
+    return {
+        "videos": [
+            {
+                "youtube_video_id": v.youtube_video_id,
+                "title": v.title,
+                "description": v.description,
+                "chapters": [
+                    f"{c.start_seconds}s {c.title}" for c in v.chapters
+                ],
+            }
+            for v in videos
+        ]
+    }
+
+
+def _payload_from_response(data: dict) -> "DiscoveryPayload":
+    topics = list(data["topics"])
+    assignments = [
+        DiscoveryAssignment(
+            youtube_video_id=item["youtube_video_id"],
+            topic_name=item["topic"],
+            confidence=1.0,
+            reason="",
+        )
+        for item in data["assignments"]
+    ]
+    return DiscoveryPayload(topics=topics, assignments=assignments)
+
+
+def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
+    """Adapt an Extractor into the LLMCallable signature `run_discovery` expects.
+
+    A single batched call: all videos are rendered into one prompt and the
+    response is parsed into a DiscoveryPayload. Schema validation and one
+    automatic retry on parse failure are owned by the Extractor itself.
+    """
+    register_discovery_prompt()
+
+    def call(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
+        context = _videos_to_context(videos)
+        result = extractor.run_one(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            context,
+        )
+        return _payload_from_response(result.data)
+
+    return call
+
+
+def make_real_llm_callable(
+    connection: sqlite3.Connection,
+    *,
+    model: str | None = None,
+) -> "LLMCallable":
+    """Construct a real-LLM `LLMCallable` (Anthropic).
+
+    Gated behind `RALPH_ALLOW_REAL_LLM=1`; raises otherwise so the verify gate
+    cannot accidentally spend tokens.
+    """
+    if os.environ.get("RALPH_ALLOW_REAL_LLM") != "1":
+        raise RuntimeError(
+            "Real LLM calls are gated behind RALPH_ALLOW_REAL_LLM=1. "
+            "Set the env var to confirm you intend to spend money."
+        )
+    from yt_channel_analyzer.extractor.anthropic_runner import (
+        DEFAULT_MODEL,
+        AnthropicRunner,
+    )
+    from yt_channel_analyzer.extractor.runner import Extractor
+
+    runner = AnthropicRunner(model=model or DEFAULT_MODEL)
+    extractor = Extractor(connection=connection, runner=runner)
+    return discovery_llm_via_extractor(extractor)
 
 
 def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:

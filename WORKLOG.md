@@ -27,6 +27,54 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / Ralph iteration 3: single batched LLM call site
+
+### Done (TDD, 9 new tests in `test_discovery.py`)
+- `discovery.py` registers prompt `discovery.topics@discovery-v1` via the
+  Extractor registry. System message instructs the LLM to emit
+  `{topics: [...], assignments: [{youtube_video_id, topic}]}` and forbids
+  prose / markdown fences. Schema (`additionalProperties: false`) enforces
+  exactly that shape — extra keys like `subtopic`/`confidence` are rejected
+  so future slices add them deliberately.
+- `register_discovery_prompt()` is idempotent — repeat calls return the
+  already-registered Prompt instead of raising.
+- `discovery_llm_via_extractor(extractor)` returns an `LLMCallable` that
+  renders all videos into one prompt and round-trips a single
+  `Extractor.run_one(...)` call. The Extractor owns schema validation +
+  one-retry on parse failure (slice 02 acceptance criterion). Slice 02
+  scope: `confidence=1.0` and `reason=""` defaults are filled by the
+  adapter; later slices (03–05) extend the schema.
+- `make_real_llm_callable(connection, *, model=None)` constructs an
+  `AnthropicRunner(model=model or DEFAULT_MODEL)` + `Extractor` wired
+  adapter. **Raises `RuntimeError` unless `RALPH_ALLOW_REAL_LLM=1`** so the
+  verify gate path can't accidentally spend tokens. Tests cover both unset
+  and `="0"` cases.
+
+### Learned
+- The existing `LLMCallable = Callable[[Sequence[DiscoveryVideo]],
+  DiscoveryPayload]` interface from slice 01 is exactly the seam needed —
+  the new adapter just produces an `LLMCallable` from an `Extractor`, no
+  changes to `run_discovery`. The caller (CLI in a later iteration) opens
+  its own connection, builds the Extractor + adapter, and passes the
+  callable into `run_discovery(..., prompt_version=DISCOVERY_PROMPT_VERSION,
+  ...)` so the run row records `discovery-v1`.
+- `Extractor` lives in `yt_channel_analyzer.extractor` (slice 00). It uses
+  the `llm_calls` audit table and a separate connection from
+  `run_discovery`'s own connection — both safe with SQLite WAL.
+
+### Next
+- Wire the prompt content for slice 02's broader §A2 checkbox: "Prompt
+  produces: list of broad topics with subtopics, plus per-episode
+  topic/subtopic assignments with confidence (0.0–1.0) and a short reason
+  string". Per the issue spec, slice 02 only ships broad topics + single
+  topic per episode — subtopics/confidence/reason land in slices 03–05.
+  So the next iteration likely focuses on the "Validate response shape;
+  retry once; on second failure mark errored" checkbox (already mostly
+  delegated to Extractor — needs the discovery-side error path to set
+  `discovery_runs.status='error'` instead of persisting partial state).
+
+---
+
 ## 2026-05-06 — Issue 02 / Ralph iteration 2: strip description boilerplate before LLM
 
 ### Done (TDD, 8 new tests in `test_discovery.py`)
