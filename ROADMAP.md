@@ -82,6 +82,9 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Episodes appear under every topic they belong to (multi-topic display) (Ralph iteration 6)
 - [x] Curation actions: rename topic, merge two topics, split a topic, move episode between subtopics, mark assignment as wrong *(rename happy path done Ralph iteration 8 — `/api/discovery/topic/rename`; merge done Ralph iteration 9 — `/api/discovery/topic/merge` re-points video_topics + subtopics with target-wins collision handling; split done Ralph iteration 10 — `/api/discovery/topic/split` creates a new topic, re-points selected video_topics, drops orphan video_subtopics under source for moved videos; move-episode-between-subtopics done Ralph iteration 11 — `/api/discovery/episode/move-subtopic` re-points the video's `video_subtopics` row within the same topic, inserts when no row exists, no-op on target match; mark-wrong done Ralph iteration 12 — `/api/discovery/episode/mark-wrong` deletes the `video_topics` row (also clears any `video_subtopics` rows under that topic) or the specific `video_subtopics` row, recording an event in a new `wrong_assignments` table for slice 08 to consume; curation-survives-rerun deferred to slice 08)*
 - [x] Sort options for episode lists: recency, confidence (Ralph iteration 7, JS-side per-topic dropdown, default recency; view count deferred — not currently ingested)
+- [ ] Configurable low-confidence threshold for episode card styling (env var or config; default 0.5; replaces the hardcoded 0.33/0.66 dual thresholds shipped in iteration 6) *(issue 09)*
+- [ ] Test asserting low-confidence episode cards render with the distinct faded/muted style on a mixed-confidence fixture *(issue 09)*
+- [ ] Document the sort-persistence decision (currently: per-topic dropdown resets to recency on reload) in the issue 09 spec or a brief note in WORKLOG/CONTEXT *(issue 09)*
 
 #### A4. Move legacy code
 - [ ] Create `legacy/` directory
