@@ -27,3 +27,7 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 ### Domain docs
 
 Single-context: one `CONTEXT.md` + `docs/adr/` at the project root. Both created lazily as terms and decisions get resolved. See `docs/agents/domain.md`.
+
+### Ralph loop
+
+Per-issue branches (`feat/issue-NN-<slug>`) drive a Ralph loop via `.ralph/`. The HITL driver `.ralph/ralph-once.sh` runs one iteration; the AFK driver `.ralph/afk-ralph.sh` runs up to `MAX_ITER` iterations unattended with a clean-tree pre-flight, verify gate (`test_discovery` + `test_extractor`), per-iteration backup tags, and stream-json + jq live filtering. Per-issue overlays go in `.ralph/issues/<NN>-overlay.md`. Logs in `.ralph/logs/` (gitignored). See `.ralph/PROMPT.md` for the iteration contract, including the `<ralph>...</ralph>` sigil protocol and HITL pause triggers.

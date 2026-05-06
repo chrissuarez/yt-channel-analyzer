@@ -15,3 +15,5 @@ venv/
 .env.*
 
 .DS_Store
+
+.ralph/logs/

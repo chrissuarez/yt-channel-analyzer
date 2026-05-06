@@ -3,6 +3,7 @@
 Status: needs-triage
 Type: HITL
 User stories covered: 1, 3, 18, 22 (from `PRD_PHASE_A_TOPIC_MAP.md`)
+Roadmap sections: §A1, §A2, §A3, §A4
 
 ## Parent
 

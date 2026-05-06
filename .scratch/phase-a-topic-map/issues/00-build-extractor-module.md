@@ -3,6 +3,7 @@
 Status: needs-triage
 Type: AFK
 User stories covered: foundational (no PRD story directly; enables all LLM work in Phase A and beyond)
+Roadmap sections: pre-Phase-A (foundational extractor module — no current ROADMAP section)
 
 ## Parent
 

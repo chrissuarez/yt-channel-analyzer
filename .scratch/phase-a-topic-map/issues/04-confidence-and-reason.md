@@ -3,6 +3,7 @@
 Status: needs-triage
 Type: AFK
 User stories covered: 6, 7
+Roadmap sections: §A2, §A3
 
 ## Parent
 

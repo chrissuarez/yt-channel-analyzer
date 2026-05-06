@@ -3,6 +3,7 @@
 Status: needs-triage
 Type: HITL
 User stories covered: 20, 21 (judgement call on map quality)
+Roadmap sections: §A5
 
 ## Parent
 
