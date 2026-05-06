@@ -364,6 +364,19 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS wrong_assignments (
+        id INTEGER PRIMARY KEY,
+        video_id INTEGER NOT NULL,
+        topic_id INTEGER NOT NULL,
+        subtopic_id INTEGER,
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+        FOREIGN KEY(subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -2038,6 +2051,102 @@ def move_episode_subtopic(
         "inserted": inserted,
         "previous_subtopic_name": previous_subtopic_name,
         "target_subtopic_id": target_subtopic_id,
+    }
+
+
+def mark_assignment_wrong(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    topic_name: str,
+    youtube_video_id: str,
+    subtopic_name: str | None = None,
+    reason: str | None = None,
+) -> dict[str, int | str | None]:
+    """Mark a topic (or subtopic) assignment for ``youtube_video_id`` as wrong.
+
+    When ``subtopic_name`` is None: deletes the matching ``video_topics`` row
+    (the video is no longer on this topic). When provided: deletes the matching
+    ``video_subtopics`` row (the video is no longer on this subtopic, but
+    remains on the parent topic). The action is recorded in
+    ``wrong_assignments`` so future code (slice 08) can replay or use it as
+    training signal.
+    """
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.cursor()
+        project_row = cursor.execute(
+            "SELECT id FROM projects WHERE name = ? ORDER BY id LIMIT 1",
+            (project_name,),
+        ).fetchone()
+        if project_row is None:
+            raise ValueError(f"project not found: {project_name}")
+        project_id = project_row[0]
+        topic_row = cursor.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, topic_name),
+        ).fetchone()
+        if topic_row is None:
+            raise ValueError(f"topic not found: {topic_name}")
+        topic_id = topic_row[0]
+        video_row = cursor.execute(
+            "SELECT id FROM videos WHERE youtube_video_id = ?",
+            (youtube_video_id,),
+        ).fetchone()
+        if video_row is None:
+            raise ValueError(f"video not found: {youtube_video_id}")
+        video_internal_id = video_row[0]
+
+        subtopic_id: int | None = None
+        if subtopic_name is None:
+            removed = cursor.execute(
+                "DELETE FROM video_topics WHERE video_id = ? AND topic_id = ?",
+                (video_internal_id, topic_id),
+            ).rowcount
+            if removed == 0:
+                raise ValueError(
+                    f"video '{youtube_video_id}' is not assigned to topic '{topic_name}'"
+                )
+            cursor.execute(
+                "DELETE FROM video_subtopics "
+                "WHERE video_id = ? AND subtopic_id IN ("
+                "SELECT id FROM subtopics WHERE topic_id = ?)",
+                (video_internal_id, topic_id),
+            )
+        else:
+            subtopic_lookup = cursor.execute(
+                "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+                (topic_id, subtopic_name),
+            ).fetchone()
+            if subtopic_lookup is None:
+                raise ValueError(
+                    f"subtopic not found under '{topic_name}': {subtopic_name}"
+                )
+            subtopic_id = subtopic_lookup[0]
+            removed = cursor.execute(
+                "DELETE FROM video_subtopics WHERE video_id = ? AND subtopic_id = ?",
+                (video_internal_id, subtopic_id),
+            ).rowcount
+            if removed == 0:
+                raise ValueError(
+                    f"video '{youtube_video_id}' is not assigned to subtopic "
+                    f"'{subtopic_name}' under '{topic_name}'"
+                )
+
+        cursor.execute(
+            """
+            INSERT INTO wrong_assignments(video_id, topic_id, subtopic_id, reason)
+            VALUES (?, ?, ?, ?)
+            """,
+            (video_internal_id, topic_id, subtopic_id, reason),
+        )
+        event_id = cursor.lastrowid
+        connection.commit()
+    return {
+        "event_id": event_id,
+        "topic_id": topic_id,
+        "subtopic_id": subtopic_id,
+        "video_id": video_internal_id,
     }
 
 
