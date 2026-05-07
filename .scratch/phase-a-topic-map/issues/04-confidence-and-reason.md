@@ -1,6 +1,6 @@
 # 04 — Confidence + reason on each assignment
 
-Status: needs-triage
+Status: done (criteria 1-4); criterion 5 re-homed under §A5 / issue 10
 Type: AFK
 User stories covered: 6, 7
 Roadmap sections: §A2, §A3
@@ -21,7 +21,7 @@ This slice does not yet apply faded styling to low-confidence cards — that's s
 - [ ] Discovery prompt updated to ask the model for confidence + reason per assignment
 - [ ] Validation rejects assignments missing confidence or reason
 - [ ] Episode cards in the GUI show confidence + reason for each topic/subtopic the episode is in
-- [ ] Smoke test: assignments come through with reasonable-looking reason strings on a real-channel run
+- [ ] Smoke test: assignments come through with reasonable-looking reason strings on a real-channel run *(re-homed: validated under §A5 / issue 10's first real DOAC run rather than as a standalone slice-04 smoke; same pattern as issue 03 criterion 6, since real-LLM smoke is HITL by Q4 spec)*
 
 ## Blocked by
 

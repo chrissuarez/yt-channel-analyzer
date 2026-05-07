@@ -27,6 +27,49 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-07 — Issue 04 / Ralph iteration 3: validator bounds + slice 04 test coverage; close-out
+
+### Done
+- `extractor/schema.py` now enforces `minimum`/`maximum` (number/integer)
+  and `minLength` (string). Doc-comment updated. Discovery's
+  `_DISCOVERY_SCHEMA` already declared `confidence: minimum 0 / maximum 1`
+  and `reason: minLength 1` from iter 1, so the runtime guard now matches
+  what the schema declares.
+- `test_discovery.py` schema rejection tests added (5):
+  `test_schema_rejects_assignment_missing_confidence`,
+  `_missing_reason`, `_confidence_below_zero`, `_confidence_above_one`,
+  `_empty_reason`.
+- `ExtractorBackedLLMTests.test_callable_threads_varied_confidence_and_reason`
+  asserts non-1.0 confidence + non-trivial reason flow via the Extractor
+  adapter into `DiscoveryAssignment` (mirrors the existing round-trip
+  test, but with varied values so the iter 2 threading is exercised on
+  realistic data).
+- `RunDiscoveryConfidencePersistenceTests` end-to-end test asserts
+  varied-confidence assignments land in `video_topics.confidence/reason`
+  AND inherit into `video_subtopics.confidence/reason` when a subtopic
+  is named (no longer 1.0 / "" placeholders).
+- Issue file `04-confidence-and-reason.md`: Status flipped to "done
+  (criteria 1-4); criterion 5 re-homed under §A5 / issue 10". Criterion
+  5 line annotated with the re-home pointer (mirrors issue 03 criterion
+  6 pattern from commit `d48cad2`).
+
+### Verified
+- `.ralph/verify.sh` (test_discovery + test_extractor): 167 tests, ~35s,
+  OK (was 160 pre-iter; +7 new tests, all green).
+
+### Smoke (recommended pre-merge, not in this AFK loop)
+- `.scratch/issue-02/smoke.py` against the new `discovery-v3` prompt is
+  the fastest sanity check that Haiku still parses the widened
+  schema with confidence + reason — but it's a real-LLM HITL trigger,
+  so leave it for an attended run after merge.
+
+### Issue 04 status: COMPLETE
+- All ROADMAP §A2/§A3 boxes ticked, all 5 issue acceptance criteria
+  accounted for (criteria 1-4 shipped iters 1-2 + this iter; criterion
+  5 re-homed).
+
+---
+
 ## 2026-05-07 — Issue 04 / Ralph iteration 1: widen discovery schema + prompt for confidence + reason
 
 ### Done

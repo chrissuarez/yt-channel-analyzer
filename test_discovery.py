@@ -3387,6 +3387,114 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
                 prompt.schema,
             )
 
+    def test_schema_rejects_assignment_missing_confidence(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "reason": "fixture",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+    def test_schema_rejects_assignment_missing_reason(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "confidence": 0.9,
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+    def test_schema_rejects_confidence_below_zero(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "confidence": -0.1,
+                            "reason": "fixture",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+    def test_schema_rejects_confidence_above_one(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "confidence": 1.5,
+                            "reason": "fixture",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+    def test_schema_rejects_empty_reason(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "confidence": 0.9,
+                            "reason": "",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
 
 class ExtractorBackedLLMTests(_RegistryIsolation):
     def test_callable_round_trips_payload_via_extractor(self) -> None:
@@ -3455,6 +3563,69 @@ class ExtractorBackedLLMTests(_RegistryIsolation):
         for a in payload.assignments:
             self.assertEqual(a.confidence, 1.0)
             self.assertEqual(a.reason, "fixture")
+
+    def test_callable_threads_varied_confidence_and_reason(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        register_discovery_prompt()
+        runner = FakeLLMRunner()
+        runner.add_response(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            {
+                "topics": ["Health", "Business"],
+                "assignments": [
+                    {
+                        "youtube_video_id": "vid1",
+                        "topic": "Health",
+                        "confidence": 0.42,
+                        "reason": "title contains 'sleep'",
+                    },
+                    {
+                        "youtube_video_id": "vid2",
+                        "topic": "Business",
+                        "confidence": 0.87,
+                        "reason": "matched chapter 'Founder stories'",
+                    },
+                ],
+            },
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                extractor = Extractor(connection=conn, runner=runner)
+                callable = discovery_llm_via_extractor(extractor)
+                videos = [
+                    DiscoveryVideo(
+                        youtube_video_id="vid1",
+                        title="Sleep",
+                        description="how sleep works",
+                        published_at=None,
+                    ),
+                    DiscoveryVideo(
+                        youtube_video_id="vid2",
+                        title="Founders",
+                        description="building",
+                        published_at=None,
+                    ),
+                ]
+                payload = callable(videos)
+
+        by_id = {a.youtube_video_id: a for a in payload.assignments}
+        self.assertAlmostEqual(by_id["vid1"].confidence, 0.42)
+        self.assertEqual(by_id["vid1"].reason, "title contains 'sleep'")
+        self.assertAlmostEqual(by_id["vid2"].confidence, 0.87)
+        self.assertEqual(by_id["vid2"].reason, "matched chapter 'Founder stories'")
 
     def test_render_serializes_videos_into_one_prompt(self) -> None:
         from yt_channel_analyzer.discovery import (
@@ -3997,6 +4168,92 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
         finally:
             _registry_module._PROMPTS.clear()
             _registry_module._PROMPTS.update(saved)
+
+
+class RunDiscoveryConfidencePersistenceTests(unittest.TestCase):
+    """Slice 04: model-emitted confidence + reason flow through
+    `_payload_from_response` and land in `video_topics` (and
+    `video_subtopics` when a subtopic is named) as the persisted values
+    — no longer the prior 1.0 / "" placeholders."""
+
+    def test_varied_confidence_and_reason_persist_to_video_topics(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                subtopics=[
+                    DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                ],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.42,
+                        reason="title contains 'sleep'",
+                        subtopic_name="Sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.87,
+                        reason="matched chapter 'Founder stories'",
+                    ),
+                ],
+            )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: payload,
+                model="stub",
+                prompt_version="discovery-v3",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id AS yt_id,
+                           t.name AS topic_name,
+                           vt.confidence AS confidence,
+                           vt.reason AS reason
+                    FROM video_topics vt
+                    JOIN videos v ON v.id = vt.video_id
+                    JOIN topics t ON t.id = vt.topic_id
+                    ORDER BY v.youtube_video_id
+                    """
+                ).fetchall()
+
+                sub_rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id AS yt_id,
+                           s.name AS subtopic_name,
+                           vs.confidence AS confidence,
+                           vs.reason AS reason
+                    FROM video_subtopics vs
+                    JOIN videos v ON v.id = vs.video_id
+                    JOIN subtopics s ON s.id = vs.subtopic_id
+                    ORDER BY v.youtube_video_id
+                    """
+                ).fetchall()
+
+        by_yt = {r["yt_id"]: r for r in rows}
+        self.assertAlmostEqual(by_yt["vid1"]["confidence"], 0.42)
+        self.assertEqual(by_yt["vid1"]["reason"], "title contains 'sleep'")
+        self.assertAlmostEqual(by_yt["vid2"]["confidence"], 0.87)
+        self.assertEqual(
+            by_yt["vid2"]["reason"], "matched chapter 'Founder stories'"
+        )
+
+        # And the subtopic row inherits the assignment's confidence + reason.
+        self.assertEqual(len(sub_rows), 1)
+        self.assertEqual(sub_rows[0]["yt_id"], "vid1")
+        self.assertAlmostEqual(sub_rows[0]["confidence"], 0.42)
+        self.assertEqual(sub_rows[0]["reason"], "title contains 'sleep'")
 
 
 if __name__ == "__main__":

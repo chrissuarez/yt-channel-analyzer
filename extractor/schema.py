@@ -4,6 +4,7 @@ Supports the subset of JSON Schema this project uses for structured outputs:
 - type: object | array | string | number | integer | boolean | null
 - required (object), properties, additionalProperties (bool)
 - items (array), minItems, maxItems
+- minLength (string), minimum / maximum (number, integer)
 - enum
 """
 from __future__ import annotations
@@ -40,6 +41,21 @@ def validate(data: Any, schema: dict, path: str = "$") -> None:
 
     if "enum" in schema and data not in schema["enum"]:
         raise SchemaValidationError(f"{path}: value {data!r} not in enum")
+
+    if expected_type in {"integer", "number"}:
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and data < minimum:
+            raise SchemaValidationError(f"{path}: {data} < minimum {minimum}")
+        if maximum is not None and data > maximum:
+            raise SchemaValidationError(f"{path}: {data} > maximum {maximum}")
+
+    if expected_type == "string":
+        min_length = schema.get("minLength")
+        if min_length is not None and len(data) < min_length:
+            raise SchemaValidationError(
+                f"{path}: string shorter than minLength {min_length}"
+            )
 
     if expected_type == "object":
         properties = schema.get("properties", {})
