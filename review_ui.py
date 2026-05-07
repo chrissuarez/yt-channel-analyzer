@@ -754,7 +754,6 @@ HTML_PAGE = """<!doctype html>
           </label>
           <button id="generate-topics-btn">Generate topic suggestions</button>
           <button id="generate-subtopics-btn">Generate subtopic suggestions</button>
-          <button id="generate-comparison-groups-btn">Generate comparison-group suggestions</button>
         </div>
       </div>
       <div class="status" id="status-box">Loading channel data… If this does not change, the page hit a client-side render error.</div>
@@ -1318,7 +1317,6 @@ HTML_PAGE = """<!doctype html>
               <span class="pill">${escapeHtml(bucket.videos.length)} video(s)</span>
               <span class="readiness ${bucket.comparison_ready ? 'ready' : 'thin'}">${bucket.readiness_label}</span>
               <div class="muted">${escapeHtml(bucket.next_step || '')}</div>
-              ${bucket.comparison_ready ? `<div class="subtopic-actions"><button class="primary-action" onclick='generateComparisonGroupsForSubtopic(${JSON.stringify(bucket.name)})'>Generate comparison groups</button></div>` : ''}
               <div class="video-list">
                 ${chips}
               </div>
