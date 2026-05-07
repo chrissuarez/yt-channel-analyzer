@@ -21,6 +21,7 @@ from yt_channel_analyzer.discovery import (
     run_discovery,
     stub_llm,
 )
+from yt_channel_analyzer.extractor import FakeLLMRunner, registry as _registry_module
 from yt_channel_analyzer.youtube import ChannelMetadata, VideoMetadata
 
 
@@ -440,6 +441,318 @@ class StubDiscoveryRunTests(unittest.TestCase):
             self.assertAlmostEqual(vid1_health["confidence"], 0.9)
             self.assertEqual(vid1_health["reason"], "title mentions sleep")
             self.assertEqual(vid1_health["discovery_run_id"], run_id)
+
+
+class ChapterParsingTests(unittest.TestCase):
+    def test_parses_typical_doac_style_description(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            Chapter,
+            parse_chapters_from_description,
+        )
+
+        description = (
+            "In this episode we cover sleep.\n"
+            "\n"
+            "0:00 Intro\n"
+            "2:15 Why sleep matters\n"
+            "15:42 Practical tips\n"
+            "1:02:30 Wrap up\n"
+            "\n"
+            "Sponsored by Acme."
+        )
+        chapters = parse_chapters_from_description(description)
+        self.assertEqual(
+            chapters,
+            (
+                Chapter(0, "Intro"),
+                Chapter(135, "Why sleep matters"),
+                Chapter(942, "Practical tips"),
+                Chapter(3750, "Wrap up"),
+            ),
+        )
+
+    def test_returns_empty_when_description_missing(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        self.assertEqual(parse_chapters_from_description(None), ())
+        self.assertEqual(parse_chapters_from_description(""), ())
+
+    def test_returns_empty_when_fewer_than_three_timestamps(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:00 Intro\n3:00 Outro\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_returns_empty_when_first_timestamp_is_not_zero(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:30 Hello\n2:00 Middle\n5:00 End\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_returns_empty_when_timestamps_not_monotonic(self) -> None:
+        from yt_channel_analyzer.discovery import parse_chapters_from_description
+
+        description = "0:00 Intro\n5:00 Middle\n3:00 Backwards\n"
+        self.assertEqual(parse_chapters_from_description(description), ())
+
+    def test_skips_lines_without_timestamps(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            Chapter,
+            parse_chapters_from_description,
+        )
+
+        description = (
+            "Some prose without a timestamp.\n"
+            "0:00 Intro\n"
+            "Another prose line.\n"
+            "1:00 Topic A\n"
+            "2:00 Topic B\n"
+        )
+        chapters = parse_chapters_from_description(description)
+        self.assertEqual(
+            chapters,
+            (
+                Chapter(0, "Intro"),
+                Chapter(60, "Topic A"),
+                Chapter(120, "Topic B"),
+            ),
+        )
+
+
+class DescriptionBoilerplateTests(unittest.TestCase):
+    def test_returns_none_and_empty_unchanged(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        self.assertIsNone(strip_description_boilerplate(None))
+        self.assertEqual(strip_description_boilerplate(""), "")
+
+    def test_strips_subscribe_cta(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "We talk about deep work and habits.\n"
+            "Don't forget to subscribe to the channel!\n"
+            "Hit the bell for more.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "We talk about deep work and habits.")
+
+    def test_strips_sponsor_read_lines(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "An episode about sleep science.\n"
+            "\n"
+            "Sponsors:\n"
+            "This episode is sponsored by Acme.\n"
+            "Use code DOAC for 20% off your first order.\n"
+            "\n"
+            "More episodes coming soon.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(
+            cleaned,
+            "An episode about sleep science.\n\nMore episodes coming soon.",
+        )
+
+    def test_strips_social_handles_and_urls(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Today we discuss habit formation.\n"
+            "Follow me on Twitter for daily threads.\n"
+            "Instagram: @host\n"
+            "https://www.instagram.com/host\n"
+            "Listen on Apple Podcasts.\n"
+            "https://open.spotify.com/show/abc\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "Today we discuss habit formation.")
+
+    def test_preserves_chapter_lines_even_if_they_look_promotional(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "0:00 Intro\n"
+            "5:00 Sponsors and what we cover today\n"
+            "12:00 Wrap up\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(
+            cleaned,
+            "0:00 Intro\n5:00 Sponsors and what we cover today\n12:00 Wrap up",
+        )
+
+    def test_collapses_consecutive_blank_lines_after_filtering(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Episode notes.\n"
+            "\n"
+            "Sponsored by Acme.\n"
+            "Use code SAVE10.\n"
+            "\n"
+            "More notes here.\n"
+        )
+        cleaned = strip_description_boilerplate(description)
+        self.assertEqual(cleaned, "Episode notes.\n\nMore notes here.")
+
+    def test_returns_empty_when_entire_description_is_boilerplate(self) -> None:
+        from yt_channel_analyzer.discovery import strip_description_boilerplate
+
+        description = (
+            "Subscribe to the channel.\n"
+            "Follow me on Twitter.\n"
+            "https://www.instagram.com/host\n"
+        )
+        self.assertEqual(strip_description_boilerplate(description), "")
+
+    def test_run_discovery_passes_filtered_description_but_original_chapters(self) -> None:
+        from yt_channel_analyzer.discovery import Chapter
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            init_db(
+                db_path,
+                project_name="proj",
+                channel_id="UC123",
+                channel_title="Channel",
+                channel_handle="@channel",
+            )
+            description = (
+                "0:00 Intro\n"
+                "1:30 Topic A\n"
+                "10:00 Topic B\n"
+                "\n"
+                "Sponsored by Acme. Use code SAVE10 for 15% off.\n"
+                "Follow me on Twitter for more.\n"
+                "https://www.instagram.com/host\n"
+            )
+            upsert_videos_for_primary_channel(
+                db_path,
+                videos=[
+                    VideoMetadata(
+                        youtube_video_id="vid1",
+                        title="With chapters and sponsors",
+                        description=description,
+                        published_at="2026-04-05T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                ],
+            )
+
+            seen: list = []
+
+            def capturing_llm(videos):
+                seen.extend(videos)
+                return DiscoveryPayload(
+                    topics=["General"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id=v.youtube_video_id,
+                            topic_name="General",
+                            confidence=1.0,
+                            reason="r",
+                        )
+                        for v in videos
+                    ],
+                )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=capturing_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            video = seen[0]
+            self.assertNotIn("Sponsored by", video.description or "")
+            self.assertNotIn("Follow me on Twitter", video.description or "")
+            self.assertNotIn("instagram.com", video.description or "")
+            self.assertEqual(
+                video.chapters,
+                (
+                    Chapter(0, "Intro"),
+                    Chapter(90, "Topic A"),
+                    Chapter(600, "Topic B"),
+                ),
+            )
+
+
+class DiscoveryVideoChaptersTests(unittest.TestCase):
+    def test_run_discovery_passes_parsed_chapters_to_llm(self) -> None:
+        from yt_channel_analyzer.discovery import Chapter
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            init_db(
+                db_path,
+                project_name="proj",
+                channel_id="UC123",
+                channel_title="Channel",
+                channel_handle="@channel",
+            )
+            chapter_desc = (
+                "0:00 Intro\n"
+                "1:30 Sleep cycles\n"
+                "10:00 Q&A\n"
+            )
+            upsert_videos_for_primary_channel(
+                db_path,
+                videos=[
+                    VideoMetadata(
+                        youtube_video_id="vid1",
+                        title="With chapters",
+                        description=chapter_desc,
+                        published_at="2026-04-05T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                    VideoMetadata(
+                        youtube_video_id="vid2",
+                        title="No chapters",
+                        description="just prose",
+                        published_at="2026-04-06T12:00:00Z",
+                        thumbnail_url=None,
+                    ),
+                ],
+            )
+
+            seen_videos: list = []
+
+            def capturing_llm(videos):
+                seen_videos.extend(videos)
+                return DiscoveryPayload(
+                    topics=["General"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id=v.youtube_video_id,
+                            topic_name="General",
+                            confidence=1.0,
+                            reason="r",
+                        )
+                        for v in videos
+                    ],
+                )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=capturing_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            by_id = {v.youtube_video_id: v for v in seen_videos}
+            self.assertEqual(
+                by_id["vid1"].chapters,
+                (
+                    Chapter(0, "Intro"),
+                    Chapter(90, "Sleep cycles"),
+                    Chapter(600, "Q&A"),
+                ),
+            )
+            self.assertEqual(by_id["vid2"].chapters, ())
 
 
 class StubLLMTests(unittest.TestCase):
@@ -2752,6 +3065,358 @@ class DiscoveryLowConfidenceThresholdTests(unittest.TestCase):
         from yt_channel_analyzer.review_ui import UI_REVISION
 
         self.assertIn("discovery", UI_REVISION)
+
+
+class _RegistryIsolation(unittest.TestCase):
+    def setUp(self) -> None:
+        self._saved = dict(_registry_module._PROMPTS)
+        _registry_module._PROMPTS.clear()
+
+    def tearDown(self) -> None:
+        _registry_module._PROMPTS.clear()
+        _registry_module._PROMPTS.update(self._saved)
+
+
+class DiscoveryPromptRegistrationTests(_RegistryIsolation):
+    def test_register_discovery_prompt_is_idempotent(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            register_discovery_prompt,
+        )
+
+        first = register_discovery_prompt()
+        second = register_discovery_prompt()
+        self.assertEqual(first.name, DISCOVERY_PROMPT_NAME)
+        self.assertEqual(first.version, DISCOVERY_PROMPT_VERSION)
+        self.assertIs(first, second)
+
+    def test_render_includes_titles_descriptions_and_chapters(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+
+        prompt = register_discovery_prompt()
+        rendered = prompt.render(
+            {
+                "videos": [
+                    {
+                        "youtube_video_id": "vidA",
+                        "title": "Sleep and the brain",
+                        "description": "how sleep works",
+                        "chapters": ["0: Intro", "120: Deep sleep"],
+                    },
+                    {
+                        "youtube_video_id": "vidB",
+                        "title": "Building a startup",
+                        "description": None,
+                        "chapters": [],
+                    },
+                ]
+            }
+        )
+        self.assertIn("vidA", rendered)
+        self.assertIn("Sleep and the brain", rendered)
+        self.assertIn("how sleep works", rendered)
+        self.assertIn("Intro", rendered)
+        self.assertIn("Deep sleep", rendered)
+        self.assertIn("vidB", rendered)
+        self.assertIn("Building a startup", rendered)
+
+    def test_schema_accepts_topics_and_assignments(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        validate(
+            {
+                "topics": ["Health"],
+                "assignments": [
+                    {"youtube_video_id": "vidA", "topic": "Health"},
+                ],
+            },
+            prompt.schema,
+        )
+
+    def test_schema_rejects_missing_topics(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {"assignments": []},
+                prompt.schema,
+            )
+
+    def test_schema_rejects_assignment_with_extra_keys(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vidA",
+                            "topic": "Health",
+                            "subtopic": "Sleep",
+                        },
+                    ],
+                },
+                prompt.schema,
+            )
+
+
+class ExtractorBackedLLMTests(_RegistryIsolation):
+    def test_callable_round_trips_payload_via_extractor(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        register_discovery_prompt()
+        runner = FakeLLMRunner()
+        runner.add_response(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            {
+                "topics": ["Health", "Business"],
+                "assignments": [
+                    {"youtube_video_id": "vid1", "topic": "Health"},
+                    {"youtube_video_id": "vid2", "topic": "Business"},
+                ],
+            },
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                extractor = Extractor(connection=conn, runner=runner)
+                callable = discovery_llm_via_extractor(extractor)
+                videos = [
+                    DiscoveryVideo(
+                        youtube_video_id="vid1",
+                        title="Sleep",
+                        description="how sleep works",
+                        published_at=None,
+                    ),
+                    DiscoveryVideo(
+                        youtube_video_id="vid2",
+                        title="Founders",
+                        description="building",
+                        published_at=None,
+                    ),
+                ]
+                payload = callable(videos)
+
+        self.assertEqual(payload.topics, ["Health", "Business"])
+        ids = {(a.youtube_video_id, a.topic_name) for a in payload.assignments}
+        self.assertEqual(
+            ids, {("vid1", "Health"), ("vid2", "Business")}
+        )
+        # Slice 02 produces broad topics + single topic per episode only.
+        # confidence/reason are placeholders until later slices.
+        for a in payload.assignments:
+            self.assertEqual(a.confidence, 1.0)
+            self.assertEqual(a.reason, "")
+
+    def test_render_serializes_videos_into_one_prompt(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        register_discovery_prompt()
+        runner = FakeLLMRunner()
+        runner.add_response(
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            {
+                "topics": ["T"],
+                "assignments": [{"youtube_video_id": "vidX", "topic": "T"}],
+            },
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                extractor = Extractor(connection=conn, runner=runner)
+                callable = discovery_llm_via_extractor(extractor)
+                callable(
+                    [
+                        DiscoveryVideo(
+                            youtube_video_id="vidX",
+                            title="Hello",
+                            description="world",
+                            published_at=None,
+                        )
+                    ]
+                )
+
+        # Single batched call: one extractor invocation regardless of video count.
+        self.assertEqual(len(runner.calls), 1)
+        rendered = runner.calls[0].rendered_prompt
+        self.assertIn("vidX", rendered)
+        self.assertIn("Hello", rendered)
+        self.assertIn("world", rendered)
+
+
+class RealLLMGuardTests(_RegistryIsolation):
+    def test_make_real_llm_callable_requires_env_var(self) -> None:
+        import os
+
+        from yt_channel_analyzer.discovery import make_real_llm_callable
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                prior = os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                try:
+                    with self.assertRaises(RuntimeError) as ctx:
+                        make_real_llm_callable(conn)
+                    self.assertIn(
+                        "RALPH_ALLOW_REAL_LLM", str(ctx.exception)
+                    )
+                finally:
+                    if prior is not None:
+                        os.environ["RALPH_ALLOW_REAL_LLM"] = prior
+
+    def test_make_real_llm_callable_rejects_zero_value(self) -> None:
+        import os
+
+        from yt_channel_analyzer.discovery import make_real_llm_callable
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                prior = os.environ.get("RALPH_ALLOW_REAL_LLM")
+                os.environ["RALPH_ALLOW_REAL_LLM"] = "0"
+                try:
+                    with self.assertRaises(RuntimeError):
+                        make_real_llm_callable(conn)
+                finally:
+                    if prior is None:
+                        os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                    else:
+                        os.environ["RALPH_ALLOW_REAL_LLM"] = prior
+
+
+class RunDiscoveryErrorPathTests(unittest.TestCase):
+    """When the LLM call raises (e.g. parse failure after Extractor's retry),
+    `run_discovery` records an errored `discovery_runs` row and persists no
+    partial topic / assignment state. The exception is re-raised so callers
+    can surface it.
+    """
+
+    def test_llm_error_marks_run_errored_and_persists_no_partial_state(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            run_discovery,
+        )
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            def failing_llm(_videos):
+                raise SchemaValidationError("malformed after retry")
+
+            with self.assertRaises(SchemaValidationError):
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=failing_llm,
+                    model="haiku-4-5",
+                    prompt_version=DISCOVERY_PROMPT_VERSION,
+                )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, model, prompt_version, status FROM discovery_runs"
+                ).fetchall()
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0]["status"], "error")
+                self.assertEqual(runs[0]["model"], "haiku-4-5")
+                self.assertEqual(runs[0]["prompt_version"], DISCOVERY_PROMPT_VERSION)
+
+                topics = conn.execute("SELECT id FROM topics").fetchall()
+                self.assertEqual(topics, [])
+
+                assignments = conn.execute(
+                    "SELECT video_id FROM video_topics WHERE discovery_run_id = ?",
+                    (runs[0]["id"],),
+                ).fetchall()
+                self.assertEqual(assignments, [])
+
+    def test_llm_error_does_not_corrupt_prior_successful_run(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            run_discovery,
+            stub_llm,
+        )
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            ok_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            def failing_llm(_videos):
+                raise SchemaValidationError("malformed after retry")
+
+            with self.assertRaises(SchemaValidationError):
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=failing_llm,
+                    model="haiku-4-5",
+                    prompt_version=DISCOVERY_PROMPT_VERSION,
+                )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, status FROM discovery_runs ORDER BY id"
+                ).fetchall()
+                self.assertEqual(len(runs), 2)
+                self.assertEqual(runs[0]["id"], ok_run_id)
+                self.assertEqual(runs[0]["status"], "success")
+                self.assertEqual(runs[1]["status"], "error")
+
+                # The successful run's assignments are still intact.
+                first_run_assignments = conn.execute(
+                    "SELECT video_id FROM video_topics WHERE discovery_run_id = ?",
+                    (ok_run_id,),
+                ).fetchall()
+                self.assertEqual(len(first_run_assignments), 2)
 
 
 if __name__ == "__main__":

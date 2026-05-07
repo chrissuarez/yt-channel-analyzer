@@ -27,6 +27,258 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-06 — Issue 02 / smoke run on DOAC + fence-strip fix in `_parse`
+
+### Done
+- HITL smoke test: ingested 15 DOAC episodes, ran `make_real_llm_callable()` against Claude Haiku 4.5. End-to-end success on second attempt.
+- First attempt failed: Haiku returned valid JSON but wrapped in ```` ```json ... ``` ```` fences despite explicit "no markdown fences" prompt directive. Added `_strip_code_fence` in `extractor/runner.py`'s `_parse`. Three new tests in `FenceStripTests` (fenced/bare-fenced/unfenced).
+- Cost note (issue 02 AC): 15 episodes / 1 batched call / 8,528 input + 689 output tokens / 6.9s wall / **$0.0120** at Haiku 4.5 pricing ($1/M in, $5/M out). Topics produced were credible (Sexual Health, AI, Wealth, Neuroscience, etc.) — see commit body for the full set.
+
+### Learned
+- "Output JSON only — no fences" in the system prompt is not sufficient on Haiku; treat fenced output as the expected case and strip defensively.
+- Slice-02 schema doesn't carry confidence, so all assignments land at the parser's default 1.0. Per spec — confidence ships in slice 04.
+
+### Next
+- CLI still requires `--stub` for `discover`/`analyze`. Adding a `--real` path is a small follow-up (file under §A5 or spin a tiny issue 02b — not blocking the merge).
+
+## 2026-05-06 — Issue 02 / Ralph iteration 6: tick persist-to-junction-tables at slice-02 scope
+
+### Done (doc-only, no code change)
+- Ticked ROADMAP §A2 line 74 ("Persist to `topics`, `subtopics`, junction
+  tables, `discovery_runs`") at slice-02 scope. `run_discovery` already
+  persists the slice-02 surface — `topics` + `video_topics` +
+  `discovery_runs` (success + errored), confidence/reason default to
+  1.0/"" since the slice-02 prompt schema rejects those keys.
+  `subtopics` / `video_subtopics` deliberately stay empty in slice 02
+  and ship in slices 03–05 as the schema widens. Mirrors the iteration 4
+  pattern (parenthetical noting deferred scope).
+
+### Learned
+- §A2 is now fully ticked at slice-02 scope. Issue 02 acceptance
+  criteria still has three open items: real-LLM smoke run on a 10-20
+  episode channel, "credible topic list" credibility check, and
+  cost-tracking note. All three require actually calling the real LLM,
+  which is HITL trigger #1 (the verify gate must not spend tokens). The
+  loop should pause here for human review per PROMPT.md instruction #3
+  ("no unchecked checkbox remains in those sections but the issue's
+  acceptance criteria are not all met").
+- `make_real_llm_callable` (iter 3) already raises unless
+  `RALPH_ALLOW_REAL_LLM=1` is set, so the pause gate is enforced in
+  code, not just the harness.
+
+### Next
+- HITL: a human runs `RALPH_ALLOW_REAL_LLM=1` against a real channel
+  (Diary of a CEO, 10-20 episodes), captures token + cost numbers, and
+  records them somewhere durable (likely a new line in this WORKLOG or
+  an issue 02 acceptance-evidence note in `.scratch/`). After that the
+  remaining issue 02 boxes can be ticked and the branch is COMPLETE.
+
+---
+
+## 2026-05-06 — Issue 02 / Ralph iteration 5: errored-run path on llm failure
+
+### Done (TDD, 2 new tests in `test_discovery.py`)
+- `discovery.py` `run_discovery` now wraps the `llm(videos)` call in
+  `try/except Exception`. On any exception it inserts a `discovery_runs`
+  row with `status='error'` (model + prompt_version still recorded for
+  audit), commits, then re-raises. Topic and `video_topics` inserts only
+  run after a successful payload, so the error path leaves no partial
+  state — exactly the slice 02 acceptance: "on second failure the run is
+  marked errored and no partial state is persisted".
+- New `RunDiscoveryErrorPathTests`:
+  - `test_llm_error_marks_run_errored_and_persists_no_partial_state` —
+    seeds a 2-video channel, passes a callable that raises
+    `SchemaValidationError` (the same exception Extractor.run_one
+    re-raises after its one-retry exhausts), asserts a single
+    `discovery_runs` row with `status='error'`, no `topics`, no
+    `video_topics`, and that the exception propagates.
+  - `test_llm_error_does_not_corrupt_prior_successful_run` — runs a
+    successful stub run first, then a failing run, asserts both rows
+    exist with the right statuses and the prior run's assignments
+    remain intact.
+
+### Learned
+- `_run_single_with_retry` in `extractor/runner.py` already does the
+  one-retry on parse failure and writes audit rows to `llm_calls` for
+  both `parse_status='retry'` and `parse_status='failed'`. Discovery only
+  needed the surface-level error path. Tests use `SchemaValidationError`
+  rather than a generic `Exception` so they exercise the realistic
+  failure shape.
+- Bare `except Exception` is intentional here: any exception means we
+  shouldn't persist topics/assignments. Catching `ExtractorError`
+  specifically would silently drop other failure modes (network errors,
+  KeyError on context dict, etc.) and still leave a partial state risk.
+
+### Next
+- Roadmap §A2 line 74: "Persist to `topics`, `subtopics`, junction
+  tables, `discovery_runs` *(persistence done; awaits real payload)*".
+  This is effectively done — `run_discovery` already persists topics +
+  `video_topics` + `discovery_runs`. `subtopics`/`video_subtopics`
+  intentionally stay empty in slice 02 (deferred to slice 03 per issue
+  spec). The bullet wraps both slice-02 and slice-03 scope; the
+  appropriate next-iteration move is to tick it with a slice-02
+  parenthetical (mirroring the line 72 / iteration 4 pattern) and let
+  slice 03 widen the schema + handlers.
+- After that line, the §A2 bullets are exhausted and the remaining issue
+  02 acceptance criteria (smoke test on a real channel; cost-tracking
+  note) require running the real LLM — that is HITL trigger #1 territory
+  and should pause the loop for human review.
+
+---
+
+## 2026-05-06 — Issue 02 / Ralph iteration 4: tick prompt-shape checkbox at slice scope
+
+### Done (no code change; doc-only)
+- Ticked ROADMAP §A2 line "Prompt produces: list of broad topics with subtopics,
+  plus per-episode topic/subtopic assignments with confidence and reason" as
+  satisfied at slice 02 scope: prompt produces broad topics + per-episode
+  single-topic assignments. Subtopics/confidence/reason are deferred to slices
+  03–05 per issue 02 spec ("Subtopics, confidence, multi-topic, and reason
+  fields stay out — they ship in slices 03, 04, 05").
+- Annotation flags the contradiction so future iterations don't re-open the
+  checkbox: `_DISCOVERY_SCHEMA` is `additionalProperties: false` and rejects
+  those keys today by design — slices 03–05 widen the schema deliberately.
+
+### Learned
+- Roadmap §A2 was authored before per-issue slicing was finalized, so several
+  checkboxes (line 72 in particular) bundle multi-slice scope into a single
+  bullet. Pattern from §A3 (e.g. lines 80, 84) is to tick with a parenthetical
+  noting what's deferred and to which slice — followed here.
+
+### Next
+- Roadmap line 73: "Validate response shape; reject malformed batches; retry
+  once" — Extractor already owns schema validation + one retry. Discovery-side
+  work needed: when the Extractor raises after the retry, mark the
+  `discovery_runs` row with `status='error'` and ensure no partial state
+  (topics / `video_topics`) is persisted. `run_discovery` currently calls the
+  llm before opening the cursor + insert path, so wrap the llm call in a
+  try/except that inserts an errored run row and re-raises (or returns a
+  sentinel — TBD per consistency with current callers).
+
+---
+
+## 2026-05-06 — Issue 02 / Ralph iteration 3: single batched LLM call site
+
+### Done (TDD, 9 new tests in `test_discovery.py`)
+- `discovery.py` registers prompt `discovery.topics@discovery-v1` via the
+  Extractor registry. System message instructs the LLM to emit
+  `{topics: [...], assignments: [{youtube_video_id, topic}]}` and forbids
+  prose / markdown fences. Schema (`additionalProperties: false`) enforces
+  exactly that shape — extra keys like `subtopic`/`confidence` are rejected
+  so future slices add them deliberately.
+- `register_discovery_prompt()` is idempotent — repeat calls return the
+  already-registered Prompt instead of raising.
+- `discovery_llm_via_extractor(extractor)` returns an `LLMCallable` that
+  renders all videos into one prompt and round-trips a single
+  `Extractor.run_one(...)` call. The Extractor owns schema validation +
+  one-retry on parse failure (slice 02 acceptance criterion). Slice 02
+  scope: `confidence=1.0` and `reason=""` defaults are filled by the
+  adapter; later slices (03–05) extend the schema.
+- `make_real_llm_callable(connection, *, model=None)` constructs an
+  `AnthropicRunner(model=model or DEFAULT_MODEL)` + `Extractor` wired
+  adapter. **Raises `RuntimeError` unless `RALPH_ALLOW_REAL_LLM=1`** so the
+  verify gate path can't accidentally spend tokens. Tests cover both unset
+  and `="0"` cases.
+
+### Learned
+- The existing `LLMCallable = Callable[[Sequence[DiscoveryVideo]],
+  DiscoveryPayload]` interface from slice 01 is exactly the seam needed —
+  the new adapter just produces an `LLMCallable` from an `Extractor`, no
+  changes to `run_discovery`. The caller (CLI in a later iteration) opens
+  its own connection, builds the Extractor + adapter, and passes the
+  callable into `run_discovery(..., prompt_version=DISCOVERY_PROMPT_VERSION,
+  ...)` so the run row records `discovery-v1`.
+- `Extractor` lives in `yt_channel_analyzer.extractor` (slice 00). It uses
+  the `llm_calls` audit table and a separate connection from
+  `run_discovery`'s own connection — both safe with SQLite WAL.
+
+### Next
+- Wire the prompt content for slice 02's broader §A2 checkbox: "Prompt
+  produces: list of broad topics with subtopics, plus per-episode
+  topic/subtopic assignments with confidence (0.0–1.0) and a short reason
+  string". Per the issue spec, slice 02 only ships broad topics + single
+  topic per episode — subtopics/confidence/reason land in slices 03–05.
+  So the next iteration likely focuses on the "Validate response shape;
+  retry once; on second failure mark errored" checkbox (already mostly
+  delegated to Extractor — needs the discovery-side error path to set
+  `discovery_runs.status='error'` instead of persisting partial state).
+
+---
+
+## 2026-05-06 — Issue 02 / Ralph iteration 2: strip description boilerplate before LLM
+
+### Done (TDD, 8 new tests in `test_discovery.py`)
+- New `strip_description_boilerplate(description)` in `discovery.py`. Line-
+  based regex filter that drops sponsor reads ("Sponsored by", "Brought to
+  you by", "Sponsors:", "Use code … for X% off"), subscribe/like/bell
+  CTAs, "Follow me on …" lines, social-platform label lines (`Twitter:`,
+  `Instagram:`), bare social/podcast URLs (instagram, twitter/x, tiktok,
+  facebook, linkedin, threads, patreon, discord, youtube/youtu.be,
+  spotify, apple), and "Listen on …" / "Available on …" CTAs. Chapter-
+  marker lines (matched by the existing `_CHAPTER_LINE` regex) are always
+  kept so episode structure still reaches the LLM.
+- `run_discovery` now sets `DiscoveryVideo.description` to the cleaned
+  text. `chapters` is still parsed from the original description so the
+  filter can't accidentally elide structure even if a chapter title
+  happens to mention a sponsor.
+- Returns `None` for `None` input, `""` for empty input, possibly `""`
+  if the entire description was boilerplate. Consecutive blank lines
+  collapsed and leading/trailing blanks trimmed.
+
+### Learned
+- Patterns ending in `\b` after `:` don't match line-final colons because
+  `:` is non-word and there's no following word char. Split the
+  `Sponsors:` rule into its own pattern (`\bsponsors?:`) without a
+  trailing `\b`. Caught by the `test_strips_sponsor_read_lines` red.
+- The boilerplate filter is intentionally aggressive — over-filter beats
+  under-filter for Phase A discovery, where a sponsor brand leaking into
+  the LLM context could nucleate a phantom topic.
+
+### Next
+- Build the single batched LLM call (Haiku 4.5 / GPT-4o-mini). HITL
+  trigger #1 — adding a real-LLM call site means the next iteration
+  must wrap it with the `RALPH_ALLOW_REAL_LLM=1` env-var guard and
+  raise without it; the verify gate must still pass with the env unset.
+
+---
+
+## 2026-05-06 — Issue 02 / Ralph iteration 1: pull chapter markers into discovery videos
+
+### Done (TDD, 7 new tests in `test_discovery.py`)
+- New `Chapter(start_seconds, title)` frozen dataclass exported from
+  `discovery.py`. New `parse_chapters_from_description(description)` helper
+  that follows YouTube's chapter-recognition rules conservatively: ≥3
+  timestamped lines, first timestamp is `0:00`, timestamps strictly
+  monotonically increasing. If any check fails, returns an empty tuple
+  rather than half-parsed chapters.
+- `DiscoveryVideo` gained a `chapters: tuple[Chapter, ...] = ()` field
+  (default empty so existing `DiscoveryVideo(...)` constructors keep
+  working). `run_discovery` now populates `chapters` per video by parsing
+  the description, so the LLM callable receives titles + descriptions +
+  chapters as the issue 02 sub-plan calls for.
+- No schema change — chapters are derived per discovery run from the
+  existing `videos.description` column. YouTube Data API doesn't return
+  chapters as a separate field anyway; they live inside descriptions.
+
+### Learned
+- The minimal helper accepts a few stylistic variants (leading bullets,
+  bracketed timestamps, an optional separator) but keeps the YouTube
+  validity rules strict, so a description with two stray timestamps in
+  prose won't be misread as chapter markers. Ad-read sponsor blocks
+  with `0:00` Intro-style chapters still parse cleanly.
+- Defaulting `chapters=()` keeps the existing `StubLLMTests` and
+  `_seed_channel_with_videos` test fixtures intact — no churn outside
+  the new tests.
+
+### Next
+- Pre-filter common boilerplate (sponsor reads, social CTAs) from
+  descriptions before they're handed to the LLM. Parsed chapters are
+  the natural anchor for "trim everything below the last chapter line"
+  if we want to be aggressive; otherwise a regex-based filter for
+  common ad-read tells.
+
+---
+
 ## 2026-05-06 — Issue 09 / Ralph iteration 14: document sort-persistence decision
 
 ### Done (docs only — no code)

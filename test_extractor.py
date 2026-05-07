@@ -123,6 +123,57 @@ class FakeLLMRunnerTests(_RegistryIsolation):
         self.assertIn("Sleep", call.rendered_prompt)
 
 
+class _RawRunner:
+    """Minimal runner that returns whatever raw text it's given. Used to exercise
+    `_parse` against LLM output the FakeLLMRunner can't produce (e.g. fenced JSON)."""
+
+    provider = "raw"
+    model = "raw-model"
+
+    def __init__(self, raw_text: str) -> None:
+        self._raw = raw_text
+        self.calls = 0
+
+    def supports_batch(self) -> bool:
+        return False
+
+    def run_single(self, *, prompt, rendered: str) -> str:
+        self.calls += 1
+        return self._raw
+
+
+class FenceStripTests(_RegistryIsolation):
+    """Haiku-style code-fenced JSON must parse without falling into the retry path."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        register_prompt(
+            name="p", version="1.0.0", render=_render, schema=SIMPLE_SCHEMA, system="sys"
+        )
+
+    def _run(self, raw: str) -> ParsedResult:
+        runner = _RawRunner(raw)
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=runner)
+            result = extractor.run_one("p", "1.0.0", {"title": "x"})
+        self.assertEqual(runner.calls, 1, "fence-stripped JSON should parse first try")
+        return result
+
+    def test_strips_json_fence(self) -> None:
+        result = self._run('```json\n{"topic": "Health", "confidence": 0.9}\n```')
+        self.assertEqual(result.parse_status, "ok")
+        self.assertEqual(result.data, {"topic": "Health", "confidence": 0.9})
+
+    def test_strips_bare_fence(self) -> None:
+        result = self._run('```\n{"topic": "Health", "confidence": 0.5}\n```')
+        self.assertEqual(result.data["confidence"], 0.5)
+
+    def test_unfenced_json_unchanged(self) -> None:
+        result = self._run('{"topic": "Health", "confidence": 0.7}')
+        self.assertEqual(result.data["confidence"], 0.7)
+
+
 class RunOneTests(_RegistryIsolation):
     def setUp(self) -> None:
         super().setUp()
