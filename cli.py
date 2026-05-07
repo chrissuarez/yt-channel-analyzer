@@ -86,7 +86,7 @@ from yt_channel_analyzer.discovery import (
     stub_llm,
 )
 from yt_channel_analyzer.legacy.comparison_group_suggestions import suggest_comparison_groups_for_video
-from yt_channel_analyzer.group_analysis import GroupAnalysisInput, build_group_analysis
+from yt_channel_analyzer.legacy.group_analysis import GroupAnalysisInput, build_group_analysis
 from yt_channel_analyzer.markdown_export import build_group_markdown_export, write_group_markdown_export
 from yt_channel_analyzer.processing import process_transcript_record
 from yt_channel_analyzer.review_ui import serve_review_ui
