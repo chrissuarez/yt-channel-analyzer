@@ -3154,6 +3154,8 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
         from yt_channel_analyzer.extractor.schema import validate
 
         prompt = register_discovery_prompt()
+        # Slice 03 added `subtopic` as a recognized assignment key, so use a
+        # key still outside the schema (confidence ships in slice 04).
         with self.assertRaises(SchemaValidationError):
             validate(
                 {
@@ -3162,9 +3164,53 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
                         {
                             "youtube_video_id": "vidA",
                             "topic": "Health",
-                            "subtopic": "Sleep",
+                            "confidence": 0.9,
                         },
                     ],
+                },
+                prompt.schema,
+            )
+
+    def test_schema_accepts_subtopics_and_assignment_subtopic(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        validate(
+            {
+                "topics": ["Health"],
+                "subtopics": [
+                    {"name": "Sleep", "parent_topic": "Health"},
+                ],
+                "assignments": [
+                    {
+                        "youtube_video_id": "vidA",
+                        "topic": "Health",
+                        "subtopic": "Sleep",
+                    },
+                ],
+            },
+            prompt.schema,
+        )
+
+    def test_schema_rejects_subtopic_with_extra_keys(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+        from yt_channel_analyzer.extractor.errors import SchemaValidationError
+        from yt_channel_analyzer.extractor.schema import validate
+
+        prompt = register_discovery_prompt()
+        with self.assertRaises(SchemaValidationError):
+            validate(
+                {
+                    "topics": ["Health"],
+                    "subtopics": [
+                        {
+                            "name": "Sleep",
+                            "parent_topic": "Health",
+                            "description": "extra",
+                        },
+                    ],
+                    "assignments": [],
                 },
                 prompt.schema,
             )
@@ -3417,6 +3463,350 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
                     (ok_run_id,),
                 ).fetchall()
                 self.assertEqual(len(first_run_assignments), 2)
+
+
+class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
+    """Slice 03: `run_discovery` persists `subtopics` + `video_subtopics`
+    rows when the LLM payload includes subtopics. Missing-subtopic
+    assignments leave the junction empty (graceful)."""
+
+    def test_persists_subtopics_under_parent_topic(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health"],
+                subtopics=[
+                    DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                    DiscoverySubtopic(name="Diet", parent_topic="Health"),
+                ],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                        subtopic_name="Sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                        subtopic_name="Diet",
+                    ),
+                ],
+            )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: payload,
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT s.name, t.name AS topic_name
+                    FROM subtopics s
+                    JOIN topics t ON t.id = s.topic_id
+                    ORDER BY s.name
+                    """
+                ).fetchall()
+            pairs = {(r["topic_name"], r["name"]) for r in rows}
+            self.assertEqual(pairs, {("Health", "Sleep"), ("Health", "Diet")})
+
+    def test_persists_video_subtopics_with_auto_source_and_run_id(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health"],
+                subtopics=[
+                    DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                ],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.7,
+                        reason="title cue",
+                        subtopic_name="Sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=0.5,
+                        reason="weak",
+                        subtopic_name="Sleep",
+                    ),
+                ],
+            )
+
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: payload,
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id, s.name AS subtopic_name,
+                           t.name AS topic_name,
+                           vs.assignment_source, vs.confidence, vs.reason,
+                           vs.discovery_run_id
+                    FROM video_subtopics vs
+                    JOIN videos v ON v.id = vs.video_id
+                    JOIN subtopics s ON s.id = vs.subtopic_id
+                    JOIN topics t ON t.id = s.topic_id
+                    ORDER BY v.youtube_video_id
+                    """
+                ).fetchall()
+            self.assertEqual(len(rows), 2)
+            for row in rows:
+                self.assertEqual(row["assignment_source"], "auto")
+                self.assertEqual(row["topic_name"], "Health")
+                self.assertEqual(row["subtopic_name"], "Sleep")
+                self.assertEqual(row["discovery_run_id"], run_id)
+            by_id = {r["youtube_video_id"]: r for r in rows}
+            self.assertAlmostEqual(by_id["vid1"]["confidence"], 0.7)
+            self.assertEqual(by_id["vid1"]["reason"], "title cue")
+
+    def test_assignment_without_subtopic_skips_junction_row(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health"],
+                subtopics=[
+                    DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                ],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                        subtopic_name="Sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                        subtopic_name=None,
+                    ),
+                ],
+            )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: payload,
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id
+                    FROM video_subtopics vs
+                    JOIN videos v ON v.id = vs.video_id
+                    """
+                ).fetchall()
+                topic_rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id
+                    FROM video_topics vt
+                    JOIN videos v ON v.id = vt.video_id
+                    """
+                ).fetchall()
+            self.assertEqual({r["youtube_video_id"] for r in rows}, {"vid1"})
+            # vid2 still appears in video_topics — only the subtopic junction
+            # is skipped when no subtopic is named.
+            self.assertEqual(
+                {r["youtube_video_id"] for r in topic_rows}, {"vid1", "vid2"}
+            )
+
+    def test_subtopic_with_unknown_parent_topic_raises(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health"],
+                subtopics=[
+                    DiscoverySubtopic(
+                        name="Sleep", parent_topic="Wellness"
+                    ),
+                ],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                    ),
+                ],
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=lambda videos: payload,
+                    model="stub",
+                    prompt_version="discovery-v2",
+                )
+            self.assertIn("Wellness", str(ctx.exception))
+
+    def test_assignment_subtopic_not_in_payload_raises(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = DiscoveryPayload(
+                topics=["Health"],
+                subtopics=[],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                        subtopic_name="Sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=1.0,
+                        reason="",
+                    ),
+                ],
+            )
+
+            with self.assertRaises(ValueError) as ctx:
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=lambda videos: payload,
+                    model="stub",
+                    prompt_version="discovery-v2",
+                )
+            self.assertIn("Sleep", str(ctx.exception))
+
+    def test_stub_llm_emits_one_subtopic_per_topic(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            STUB_SUBTOPIC_NAME,
+            STUB_TOPIC_NAME,
+            DiscoveryVideo,
+        )
+
+        videos = [
+            DiscoveryVideo(
+                youtube_video_id="vidA",
+                title="t",
+                description=None,
+                published_at=None,
+            ),
+            DiscoveryVideo(
+                youtube_video_id="vidB",
+                title="t",
+                description=None,
+                published_at=None,
+            ),
+        ]
+        payload = stub_llm(videos)
+        self.assertEqual(
+            [(s.name, s.parent_topic) for s in payload.subtopics],
+            [(STUB_SUBTOPIC_NAME, STUB_TOPIC_NAME)],
+        )
+        for assignment in payload.assignments:
+            self.assertEqual(assignment.subtopic_name, STUB_SUBTOPIC_NAME)
+
+    def test_payload_from_extractor_response_carries_subtopics(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryVideo,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        saved = dict(_registry_module._PROMPTS)
+        _registry_module._PROMPTS.clear()
+        try:
+            register_discovery_prompt()
+            runner = FakeLLMRunner()
+            runner.add_response(
+                DISCOVERY_PROMPT_NAME,
+                DISCOVERY_PROMPT_VERSION,
+                {
+                    "topics": ["Health"],
+                    "subtopics": [
+                        {"name": "Sleep", "parent_topic": "Health"},
+                    ],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vid1",
+                            "topic": "Health",
+                            "subtopic": "Sleep",
+                        },
+                    ],
+                },
+            )
+            with TemporaryDirectory() as tmpdir:
+                db_path = Path(tmpdir) / "test.sqlite3"
+                _seed_channel_with_videos(db_path)
+                with connect(db_path) as conn:
+                    ensure_schema(conn)
+                    extractor = Extractor(connection=conn, runner=runner)
+                    callable_ = discovery_llm_via_extractor(extractor)
+                    payload = callable_(
+                        [
+                            DiscoveryVideo(
+                                youtube_video_id="vid1",
+                                title="t",
+                                description="d",
+                                published_at=None,
+                            )
+                        ]
+                    )
+            self.assertEqual(
+                [(s.name, s.parent_topic) for s in payload.subtopics],
+                [("Sleep", "Health")],
+            )
+            self.assertEqual(payload.assignments[0].subtopic_name, "Sleep")
+        finally:
+            _registry_module._PROMPTS.clear()
+            _registry_module._PROMPTS.update(saved)
 
 
 if __name__ == "__main__":

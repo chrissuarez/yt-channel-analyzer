@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -171,17 +171,25 @@ def parse_chapters_from_description(description: str | None) -> tuple[Chapter, .
 
 
 @dataclass(frozen=True)
+class DiscoverySubtopic:
+    name: str
+    parent_topic: str
+
+
+@dataclass(frozen=True)
 class DiscoveryAssignment:
     youtube_video_id: str
     topic_name: str
     confidence: float
     reason: str
+    subtopic_name: str | None = None
 
 
 @dataclass(frozen=True)
 class DiscoveryPayload:
     topics: list[str]
     assignments: list[DiscoveryAssignment]
+    subtopics: list[DiscoverySubtopic] = field(default_factory=list)
 
 
 LLMCallable = Callable[[Sequence[DiscoveryVideo]], DiscoveryPayload]
@@ -193,7 +201,7 @@ STUB_PROMPT_VERSION = "stub-v0"
 
 
 DISCOVERY_PROMPT_NAME = "discovery.topics"
-DISCOVERY_PROMPT_VERSION = "discovery-v1"
+DISCOVERY_PROMPT_VERSION = "discovery-v2"
 
 
 _DISCOVERY_SYSTEM = (
@@ -202,12 +210,18 @@ _DISCOVERY_SYSTEM = (
     "\n"
     "Reply with a single JSON object of the form:\n"
     '  {"topics": ["Topic A", "Topic B"], '
-    '"assignments": [{"youtube_video_id": "<id>", "topic": "Topic A"}]}\n'
+    '"subtopics": [{"name": "Sub A1", "parent_topic": "Topic A"}], '
+    '"assignments": [{"youtube_video_id": "<id>", "topic": "Topic A", '
+    '"subtopic": "Sub A1"}]}\n'
     "\n"
     "Rules:\n"
     "- Every supplied episode must appear exactly once in `assignments`.\n"
     "- Every `topic` in `assignments` must also appear in `topics`.\n"
     "- Choose 3-12 broad topics; reuse one topic across many episodes.\n"
+    "- Propose 2-6 subtopics per topic; each subtopic's `parent_topic` "
+    "must appear in `topics`.\n"
+    "- For each assignment, pick a `subtopic` whose `parent_topic` matches "
+    "the assignment's `topic`. Omit `subtopic` if no subtopic fits.\n"
     "- Output JSON only — no prose, no markdown fences."
 )
 
@@ -222,6 +236,18 @@ _DISCOVERY_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "minItems": 1,
         },
+        "subtopics": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["name", "parent_topic"],
+                "properties": {
+                    "name": {"type": "string"},
+                    "parent_topic": {"type": "string"},
+                },
+            },
+        },
         "assignments": {
             "type": "array",
             "items": {
@@ -231,6 +257,7 @@ _DISCOVERY_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "youtube_video_id": {"type": "string"},
                     "topic": {"type": "string"},
+                    "subtopic": {"type": "string"},
                 },
             },
         },
@@ -292,16 +319,23 @@ def _videos_to_context(videos: Sequence[DiscoveryVideo]) -> dict:
 
 def _payload_from_response(data: dict) -> "DiscoveryPayload":
     topics = list(data["topics"])
+    subtopics = [
+        DiscoverySubtopic(name=item["name"], parent_topic=item["parent_topic"])
+        for item in data.get("subtopics", []) or []
+    ]
     assignments = [
         DiscoveryAssignment(
             youtube_video_id=item["youtube_video_id"],
             topic_name=item["topic"],
             confidence=1.0,
             reason="",
+            subtopic_name=item.get("subtopic"),
         )
         for item in data["assignments"]
     ]
-    return DiscoveryPayload(topics=topics, assignments=assignments)
+    return DiscoveryPayload(
+        topics=topics, assignments=assignments, subtopics=subtopics
+    )
 
 
 def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
@@ -351,20 +385,30 @@ def make_real_llm_callable(
     return discovery_llm_via_extractor(extractor)
 
 
+STUB_SUBTOPIC_NAME = "General sub"
+
+
 def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
-    """Hardcoded LLM stub: one topic, every video assigned to it.
+    """Hardcoded LLM stub: one topic + one subtopic, every video assigned.
 
     Used by `discover --stub` to wire the end-to-end pipeline without
-    spending tokens. Real LLM lands in slice 02.
+    spending tokens. Real LLM lands in slice 02; subtopic shape ships
+    in slice 03.
     """
     return DiscoveryPayload(
         topics=[STUB_TOPIC_NAME],
+        subtopics=[
+            DiscoverySubtopic(
+                name=STUB_SUBTOPIC_NAME, parent_topic=STUB_TOPIC_NAME
+            )
+        ],
         assignments=[
             DiscoveryAssignment(
                 youtube_video_id=video.youtube_video_id,
                 topic_name=STUB_TOPIC_NAME,
                 confidence=1.0,
                 reason="stub assignment",
+                subtopic_name=STUB_SUBTOPIC_NAME,
             )
             for video in videos
         ],
@@ -466,6 +510,27 @@ def run_discovery(
             ).fetchone()
             topic_id_by_name[topic_name] = row["id"]
 
+        subtopic_id_by_pair: dict[tuple[int, str], int] = {}
+        for subtopic in payload.subtopics:
+            parent_topic_id = topic_id_by_name.get(subtopic.parent_topic)
+            if parent_topic_id is None:
+                raise ValueError(
+                    "subtopic references topic not in payload.topics: "
+                    f"{subtopic.parent_topic}"
+                )
+            cursor.execute(
+                """
+                INSERT INTO subtopics(topic_id, name) VALUES (?, ?)
+                ON CONFLICT(topic_id, name) DO UPDATE SET name = excluded.name
+                """,
+                (parent_topic_id, subtopic.name),
+            )
+            row = cursor.execute(
+                "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+                (parent_topic_id, subtopic.name),
+            ).fetchone()
+            subtopic_id_by_pair[(parent_topic_id, subtopic.name)] = row["id"]
+
         for assignment in payload.assignments:
             video_id = video_id_by_yt.get(assignment.youtube_video_id)
             if video_id is None:
@@ -497,6 +562,37 @@ def run_discovery(
                     run_id,
                 ),
             )
+
+            if assignment.subtopic_name:
+                subtopic_id = subtopic_id_by_pair.get(
+                    (topic_id, assignment.subtopic_name)
+                )
+                if subtopic_id is None:
+                    raise ValueError(
+                        "assignment references subtopic not in "
+                        f"payload.subtopics under topic {assignment.topic_name!r}: "
+                        f"{assignment.subtopic_name}"
+                    )
+                cursor.execute(
+                    """
+                    INSERT INTO video_subtopics(
+                        video_id, subtopic_id, assignment_source,
+                        confidence, reason, discovery_run_id
+                    ) VALUES (?, ?, 'auto', ?, ?, ?)
+                    ON CONFLICT(video_id, subtopic_id) DO UPDATE SET
+                        assignment_source = excluded.assignment_source,
+                        confidence = excluded.confidence,
+                        reason = excluded.reason,
+                        discovery_run_id = excluded.discovery_run_id
+                    """,
+                    (
+                        video_id,
+                        subtopic_id,
+                        assignment.confidence,
+                        assignment.reason,
+                        run_id,
+                    ),
+                )
 
         connection.commit()
         return run_id

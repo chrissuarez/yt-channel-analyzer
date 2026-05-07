@@ -27,6 +27,70 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-07 — Issue 03 / Ralph iteration 1: widen discovery to emit + persist subtopics
+
+### Done (TDD, 8 new tests in `test_discovery.py`)
+- `_DISCOVERY_SCHEMA` now accepts an optional `subtopics: [{name, parent_topic}]`
+  array on the payload and an optional `subtopic` field on each assignment.
+  Schema stays `additionalProperties: false` everywhere — slice 04/05 will
+  relax confidence/reason/multi-topic deliberately.
+- `DISCOVERY_PROMPT_VERSION` bumped `discovery-v1` → `discovery-v2`. System
+  prompt updated to ask for 2-6 subtopics per topic and to name a `subtopic`
+  on each assignment whose `parent_topic` matches the assignment's `topic`.
+- New `DiscoverySubtopic(name, parent_topic)` dataclass exported. `DiscoveryPayload`
+  carries `subtopics: list[DiscoverySubtopic]` (default `[]`); `DiscoveryAssignment`
+  carries `subtopic_name: str | None = None`. Defaults keep all existing
+  call-sites/tests intact.
+- `run_discovery` persistence: inserts `subtopics` rows under their parent
+  topic id (idempotent on `(topic_id, name)`) and writes `video_subtopics`
+  rows with `assignment_source='auto'`, `confidence`/`reason` mirrored from
+  the assignment, `discovery_run_id=run_id`. Assignments without a
+  subtopic skip the junction insert. Unknown parent_topic on a subtopic, or
+  an assignment-level subtopic that isn't in `payload.subtopics` under the
+  named topic, raises `ValueError` (mirrors the existing topic validator).
+- `stub_llm` now emits one subtopic (`"General sub"` under `"General"`)
+  with every video assigned to it, so the stub end-to-end exercises the
+  new persistence path.
+- Test updates: existing `test_schema_rejects_assignment_with_extra_keys`
+  switched its rejected key from `subtopic` (now valid) to `confidence`
+  (still rejected until slice 04). Two new schema tests +
+  `RunDiscoverySubtopicPersistenceTests` (7 tests) cover persistence,
+  graceful-skip, both raise paths, stub shape, and Extractor-backed
+  payload round-trip.
+- ROADMAP §A2 lines 72/74 amended with slice 03 scope postscripts
+  (mirrors the slice 02 pattern).
+
+### Learned
+- Adding `subtopic_name` as the last field on the existing `DiscoveryAssignment`
+  with a default of `None` and `subtopics` last on `DiscoveryPayload` with
+  `field(default_factory=list)` keeps the dataclass-defaults rule satisfied
+  and avoids a churn cascade across the ~30 test sites that build payloads
+  positionally — none of them touch the new fields.
+- Schema has `subtopics` optional (not in `required`) on purpose: existing
+  ExtractorBackedLLMTests fixtures + RunDiscoveryErrorPathTests handcraft
+  payloads without the new key, and the slice 02 stub shape needs to keep
+  validating cleanly. Real LLM is asked for subtopics via the system
+  prompt; the schema floor is "topics + assignments must be present."
+- Bumping `DISCOVERY_PROMPT_VERSION` is correct because the system prompt
+  + schema both changed. `register_discovery_prompt` is idempotent on
+  `(name, version)` so old `discovery-v1` registrations from other test
+  modules stay isolated by `_RegistryIsolation` setUp/tearDown.
+
+### Next
+- §A3 line 80 ("Topic detail: subtopics + episodes assigned to each")
+  becomes implementable now that `video_subtopics` rows actually populate
+  via discovery. Likely shape: extend `_build_discovery_topic_map` payload
+  with per-topic subtopic buckets + episode arrays, and render a third
+  drill-down level in the JS topic-card. Issue 03 acceptance criterion
+  "GUI: topic map view drills into a topic detail view that lists
+  subtopics with counts; clicking a subtopic shows the assigned episode
+  list" maps directly here.
+- After §A3 line 80, issue 03's smoke-test acceptance ("a small real
+  channel produces topics with at least 2 subtopics each") still needs
+  a real-LLM run — HITL trigger #1.
+
+---
+
 ## 2026-05-06 — Issue 02 / smoke run on DOAC + fence-strip fix in `_parse`
 
 ### Done
