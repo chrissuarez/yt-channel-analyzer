@@ -14,9 +14,63 @@ source .env
 set +a
 ```
 
+For the end-to-end Phase A walkthrough, see
+[`docs/operator-workflow.md`](docs/operator-workflow.md). This file is
+the per-command reference.
+
 ---
 
-## 1. Create a fresh test DB
+## 1. Phase A: discover + review (primary workflow)
+
+The single-pass topic-map pipeline. One LLM call per run produces broad
+topics + subtopics + per-episode multi-topic assignments with
+confidence and reason.
+
+### Run discovery (stub)
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  --stub
+```
+
+`--stub` is currently required. Real-LLM mode runs via
+`.scratch/issue-02/smoke.py` (sets `RALPH_ALLOW_REAL_LLM=1` internally,
+instruments token cost). A `--real` CLI flag is an open follow-up.
+
+### Serve the review UI
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
+  --db-path ./tmp/doac.sqlite
+```
+
+Default bind `127.0.0.1:8000`. Discovery view lists topics → expand to
+subtopics → expand to episodes with confidence + reason + thumbnail.
+
+### Tune low-confidence flagging
+
+```bash
+YTA_LOW_CONFIDENCE_THRESHOLD=0.6 \
+  PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
+  --db-path ./tmp/doac.sqlite
+```
+
+Default threshold `0.5`. Assignments below threshold render with a
+visual flag. Curate them via **Wrong topic** / **Wrong subtopic**
+buttons in the UI; events are logged to the `wrong_assignments` table.
+
+### List discovery runs (sqlite3)
+
+```bash
+sqlite3 ./tmp/doac.sqlite \
+  'SELECT id, created_at, model, prompt_version FROM discovery_runs ORDER BY id'
+```
+
+---
+
+## 2. Create a fresh test DB
 
 ### Init DB
 
@@ -55,7 +109,7 @@ python3 -m yt_channel_analyzer.cli show-videos --db-path ./tmp/test.sqlite
 
 ---
 
-## 2. Broad topics
+## 3. Broad topics (manual curation)
 
 ### Create topic manually
 
@@ -92,7 +146,7 @@ python3 -m yt_channel_analyzer.cli show-video-topics \
 
 ---
 
-## 3. AI broad-topic suggestions
+## 4. AI broad-topic suggestions *(legacy multi-step flow — superseded by §1 `discover` for Phase A; kept for Phase C use)*
 
 ### Generate suggestions
 
@@ -192,7 +246,7 @@ python3 -m yt_channel_analyzer.cli supersede-stale-topic-suggestions \
 
 ---
 
-## 4. Subtopics
+## 5. Subtopics (manual curation)
 
 ### Create subtopic manually
 
@@ -230,7 +284,7 @@ python3 -m yt_channel_analyzer.cli show-video-subtopics \
 
 ---
 
-## 5. AI subtopic suggestions
+## 6. AI subtopic suggestions *(legacy multi-step flow — superseded by §1 `discover`)*
 
 ### Generate subtopic suggestions for one approved broad topic
 
@@ -294,7 +348,7 @@ python3 -m yt_channel_analyzer.cli rename-subtopic-suggestion-label \
 
 ---
 
-## 6. Comparison groups
+## 7. Comparison groups *(Phase C — module under `legacy/`; CLI prints `[legacy]` warning)*
 
 ### Create comparison group manually
 
@@ -332,7 +386,7 @@ python3 -m yt_channel_analyzer.cli show-comparison-group \
 
 ---
 
-## 7. AI comparison-group suggestions
+## 8. AI comparison-group suggestions *(Phase C — module under `legacy/`; CLI prints `[legacy]` warning)*
 
 ### Generate comparison-group suggestions for one approved subtopic
 
@@ -396,7 +450,7 @@ python3 -m yt_channel_analyzer.cli rename-comparison-group-suggestion-label \
 
 ---
 
-## 8. Transcript / processing / analysis
+## 9. Transcript / processing / analysis *(Phase C — modules under `legacy/`; CLI prints `[legacy]` warning)*
 
 ### Fetch transcripts for one group
 
@@ -456,7 +510,7 @@ python3 -m yt_channel_analyzer.cli export-group-markdown \
 
 ---
 
-## 9. Search / overview / cleanup
+## 10. Search / overview / cleanup
 
 ### Search stored library
 
@@ -502,29 +556,31 @@ python3 -m yt_channel_analyzer.cli rename-comparison-group \
 
 ---
 
-## Fastest end-to-end smoke test
+## Fastest end-to-end smoke test (Phase A, stub)
 
 ```bash
-python3 -m yt_channel_analyzer.cli init-db \
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli init-db \
   --db-path ./tmp/smoke.sqlite \
   --project-name "smoke" \
   --channel-id UCGq-a57w-aPwyi3pW7XLiHw \
   --channel-title "The Diary Of A CEO" \
   --channel-handle "@thediaryofaceo"
 
-python3 -m yt_channel_analyzer.cli fetch-channel \
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli fetch-channel \
   --db-path ./tmp/smoke.sqlite \
   --project-name "smoke" \
   "@thediaryofaceo"
 
-python3 -m yt_channel_analyzer.cli fetch-videos \
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli fetch-videos \
   --db-path ./tmp/smoke.sqlite \
   --limit 20
 
-python3 -m yt_channel_analyzer.cli suggest-topics \
-  --db-path ./tmp/smoke.sqlite
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/smoke.sqlite \
+  --project-name "smoke" \
+  --stub
 
-python3 -m yt_channel_analyzer.cli review-topic-suggestions \
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
   --db-path ./tmp/smoke.sqlite
 ```
 
@@ -533,7 +589,8 @@ python3 -m yt_channel_analyzer.cli review-topic-suggestions \
 ## Notes
 
 - Use `./tmp/project-fresh.sqlite` for the current main working DB unless you intentionally want a fresh test DB.
-- Load `.env` before AI suggestion commands so `OPENAI_API_KEY` and `YOUTUBE_API_KEY` are available.
+- Load `.env` before any real-LLM command so `ANTHROPIC_API_KEY` and `YOUTUBE_API_KEY` are available.
 - `show-videos` is a sample view, not a full dump. Trust the `Video count:` line.
 - AI suggestion workflows are reviewable first. Nothing should auto-apply unless you explicitly approve/apply.
+- Phase A primary path is `discover` + `serve-review-ui` (§1). The §§ 4, 6, 7, 8, 9 multi-step suggestion + comparison-group flows are legacy / Phase C.
 - Keep this file updated whenever commands or CLI argument shapes change.

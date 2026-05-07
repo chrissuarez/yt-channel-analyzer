@@ -97,9 +97,9 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Update `cli.py` so comparison-group commands still work but warn that they're legacy (`_warn_legacy()` stderr line on entry to all 21 group/comparison-group commands)
 
 #### A5. Documentation and operator guidance
-- [ ] Document the Phase A end-to-end operator workflow
-- [ ] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
-- [ ] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel)*
+- [x] Document the Phase A end-to-end operator workflow
+- [x] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
+- [ ] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel; also subsumes issue 04 criterion 5: validate model-emitted confidence + reason quality on a real channel)*
 
 ---
 
