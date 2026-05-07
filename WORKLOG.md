@@ -1343,3 +1343,11 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 ### Verified
 - `discover` + `extractor` test gate green throughout (147 tests, ~33s).
 - `test_transcripts` holds at the same 2 pre-existing failures (49 tests, ~16s).
+
+## 2026-05-07 — Slice 04 payload threading (Ralph iter 2)
+
+- `discovery._payload_from_response` now threads `confidence` (float-coerced) + `reason` from each assignment item; no more hardcoded `1.0` / `""`.
+- `stub_llm` already shipped `reason="stub assignment"` from slice 03; unchanged.
+- `test_schema_rejects_assignment_with_extra_keys` re-pointed: now passes valid `confidence` + `reason` plus an extra `priority` key (since `confidence` is now a real schema property after slice 04 iter 1).
+- `test_callable_round_trips_payload_via_extractor` expectation updated to threaded `reason="fixture"`.
+- Verify gate: 160 tests green (~35s).

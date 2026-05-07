@@ -343,8 +343,8 @@ def _payload_from_response(data: dict) -> "DiscoveryPayload":
         DiscoveryAssignment(
             youtube_video_id=item["youtube_video_id"],
             topic_name=item["topic"],
-            confidence=1.0,
-            reason="",
+            confidence=float(item["confidence"]),
+            reason=item["reason"],
             subtopic_name=item.get("subtopic"),
         )
         for item in data["assignments"]

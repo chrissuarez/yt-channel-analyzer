@@ -3322,8 +3322,8 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
         from yt_channel_analyzer.extractor.schema import validate
 
         prompt = register_discovery_prompt()
-        # Slice 03 added `subtopic` as a recognized assignment key, so use a
-        # key still outside the schema (confidence ships in slice 04).
+        # Slice 04 added `confidence` + `reason` as recognized assignment
+        # keys, so use a key still outside the schema.
         with self.assertRaises(SchemaValidationError):
             validate(
                 {
@@ -3333,6 +3333,8 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
                             "youtube_video_id": "vidA",
                             "topic": "Health",
                             "confidence": 0.9,
+                            "reason": "fixture",
+                            "priority": "high",
                         },
                     ],
                 },
@@ -3449,11 +3451,10 @@ class ExtractorBackedLLMTests(_RegistryIsolation):
         self.assertEqual(
             ids, {("vid1", "Health"), ("vid2", "Business")}
         )
-        # Slice 02 produces broad topics + single topic per episode only.
-        # confidence/reason are placeholders until later slices.
+        # Slice 04: confidence + reason thread through from the LLM payload.
         for a in payload.assignments:
             self.assertEqual(a.confidence, 1.0)
-            self.assertEqual(a.reason, "")
+            self.assertEqual(a.reason, "fixture")
 
     def test_render_serializes_videos_into_one_prompt(self) -> None:
         from yt_channel_analyzer.discovery import (
