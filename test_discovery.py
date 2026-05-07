@@ -1245,6 +1245,160 @@ class DiscoveryTopicMapEpisodesPayloadTests(unittest.TestCase):
             self.assertAlmostEqual(vid1_business["confidence"], 0.4)
 
 
+class DiscoveryTopicMapSubtopicPayloadTests(unittest.TestCase):
+    """Slice 03 / §A3 line 80: state payload exposes per-topic subtopic
+    buckets with episode lists, plus an `unassigned_within_topic` bucket
+    for episodes assigned to a topic but no subtopic."""
+
+    def test_topic_payload_includes_subtopic_buckets_with_episodes(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    subtopics=[
+                        DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                        DiscoverySubtopic(name="Diet", parent_topic="Health"),
+                    ],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="title mentions sleep",
+                            subtopic_name="Sleep",
+                        ),
+                        DiscoveryAssignment(
+                            youtube_video_id="vid2",
+                            topic_name="Health",
+                            confidence=0.8,
+                            reason="title mentions diet",
+                            subtopic_name="Diet",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            payload = build_state_payload(db_path)
+            topics_by_name = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }
+            health = topics_by_name["Health"]
+            self.assertEqual(health["subtopic_count"], 2)
+            buckets = {b["name"]: b for b in health["subtopics"]}
+            self.assertEqual(set(buckets), {"Sleep", "Diet"})
+            self.assertEqual(buckets["Sleep"]["episode_count"], 1)
+            self.assertEqual(
+                buckets["Sleep"]["episodes"][0]["youtube_video_id"], "vid1"
+            )
+            self.assertEqual(buckets["Diet"]["episode_count"], 1)
+            self.assertEqual(
+                buckets["Diet"]["episodes"][0]["youtube_video_id"], "vid2"
+            )
+            self.assertEqual(health["unassigned_within_topic"], [])
+
+    def test_topic_payload_collects_episodes_without_subtopic_in_unassigned(self) -> None:
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    subtopics=[
+                        DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                    ],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="cue",
+                            subtopic_name="Sleep",
+                        ),
+                        DiscoveryAssignment(
+                            youtube_video_id="vid2",
+                            topic_name="Health",
+                            confidence=0.6,
+                            reason="weak",
+                            subtopic_name=None,
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            payload = build_state_payload(db_path)
+            topics_by_name = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }
+            health = topics_by_name["Health"]
+            self.assertEqual(health["subtopic_count"], 1)
+            self.assertEqual(
+                {b["name"] for b in health["subtopics"]}, {"Sleep"}
+            )
+            sleep = health["subtopics"][0]
+            self.assertEqual(
+                {e["youtube_video_id"] for e in sleep["episodes"]}, {"vid1"}
+            )
+            self.assertEqual(
+                {e["youtube_video_id"] for e in health["unassigned_within_topic"]},
+                {"vid2"},
+            )
+
+    def test_topic_with_no_subtopics_has_empty_buckets(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="cue",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            health = next(
+                t for t in payload["discovery_topic_map"]["topics"]
+                if t["name"] == "Health"
+            )
+            self.assertEqual(health["subtopics"], [])
+            self.assertEqual(health["subtopic_count"], 0)
+            self.assertEqual(
+                {e["youtube_video_id"] for e in health["unassigned_within_topic"]},
+                {"vid1"},
+            )
+
+
 class DiscoveryTopicEpisodesHTMLTests(unittest.TestCase):
     def test_html_page_has_episode_list_renderer_hook(self) -> None:
         from yt_channel_analyzer.review_ui import ReviewUIApp
@@ -1252,6 +1406,15 @@ class DiscoveryTopicEpisodesHTMLTests(unittest.TestCase):
         html = ReviewUIApp._render_html_page()
         self.assertIn("discovery-episode-list", html)
         self.assertIn("topic.episodes", html)
+
+    def test_html_page_has_subtopic_bucket_renderer(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function renderDiscoverySubtopicBuckets", html)
+        self.assertIn("discovery-subtopic-bucket", html)
+        self.assertIn("Unassigned within topic", html)
+        self.assertIn("Subtopics", html)
 
     def test_ui_revision_advances_for_episode_list(self) -> None:
         from yt_channel_analyzer.review_ui import UI_REVISION

@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-06.9-discovery-confidence-threshold"
+UI_REVISION = "2026-05-07.1-discovery-subtopic-drilldown"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -374,6 +374,29 @@ HTML_PAGE = """<!doctype html>
     .subtopic-video-wrong:hover {
       background: rgba(252, 165, 165, 0.22);
     }
+    .discovery-subtopic-list {
+      display: grid;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .discovery-subtopic-bucket {
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px;
+      background: rgba(11,16,32,0.32);
+      padding: 6px 10px;
+    }
+    .discovery-subtopic-bucket > summary {
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .discovery-subtopic-bucket > summary::-webkit-details-marker { display: none; }
+    .discovery-subtopic-bucket .discovery-episode-list { margin-top: 8px; }
+    .discovery-subtopic-unassigned > summary { color: var(--muted); font-style: italic; }
     .discovery-episode-sort-row {
       display: flex;
       align-items: center;
@@ -1139,6 +1162,8 @@ HTML_PAGE = """<!doctype html>
               </label>
             </div>`
           : '';
+        const subtopicBucketsHtml = renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold);
+        const subtopicCount = topic.subtopic_count || (topic.subtopics ? topic.subtopics.length : 0);
         return `
           <article class="topic-card discovery-topic-card">
             <div class="discovery-topic-header">
@@ -1160,14 +1185,45 @@ HTML_PAGE = """<!doctype html>
             </div>
             <div class="topic-stats">
               <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
+              <div class="topic-stat"><span class="k">Subtopics</span><strong>${escapeHtml(subtopicCount)}</strong></div>
               <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
             </div>
             <div class="confidence-bar ${barClass}"><span style="width:${barWidth}%"></span></div>
+            ${subtopicBucketsHtml}
             ${sortRowHtml}
             ${episodeListHtml}
           </article>
         `;
       }).join('');
+    }
+
+    function renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold) {
+      const subtopics = topic.subtopics || [];
+      const unassigned = topic.unassigned_within_topic || [];
+      if (!subtopics.length && !unassigned.length) return '';
+      const bucketHtml = subtopics.map((bucket) => {
+        const eps = sortDiscoveryEpisodes(bucket.episodes || [], sortMode);
+        const items = eps.length
+          ? `<ol class="discovery-episode-list">${eps.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold)).join('')}</ol>`
+          : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
+        return `
+          <details class="discovery-subtopic-bucket">
+            <summary>${escapeHtml(bucket.name)} <span class="pill">${escapeHtml(bucket.episode_count)}</span></summary>
+            ${items}
+          </details>`;
+      }).join('');
+      const unassignedHtml = unassigned.length
+        ? (() => {
+            const eps = sortDiscoveryEpisodes(unassigned, sortMode);
+            const items = `<ol class="discovery-episode-list">${eps.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold)).join('')}</ol>`;
+            return `
+              <details class="discovery-subtopic-bucket discovery-subtopic-unassigned">
+                <summary>Unassigned within topic <span class="pill">${escapeHtml(unassigned.length)}</span></summary>
+                ${items}
+              </details>`;
+          })()
+        : '';
+      return `<div class="discovery-subtopic-list">${bucketHtml}${unassignedHtml}</div>`;
     }
 
     function renderDiscoveryEpisodeItem(episode, topicName, lowThreshold) {
@@ -2124,6 +2180,20 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
             (run_row["id"],),
         ).fetchall()
 
+        subtopic_rows = connection.execute(
+            """
+            SELECT subtopics.topic_id AS topic_id,
+                   subtopics.name AS subtopic_name,
+                   videos.youtube_video_id AS youtube_video_id
+            FROM video_subtopics
+            JOIN subtopics ON subtopics.id = video_subtopics.subtopic_id
+            JOIN videos ON videos.id = video_subtopics.video_id
+            WHERE video_subtopics.discovery_run_id = ?
+            ORDER BY subtopics.name COLLATE NOCASE
+            """,
+            (run_row["id"],),
+        ).fetchall()
+
     episodes_by_topic: dict[int, list[dict[str, Any]]] = {}
     for row in episode_rows:
         episodes_by_topic.setdefault(int(row["topic_id"]), []).append(
@@ -2139,6 +2209,49 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
             }
         )
 
+    subtopic_assignment: dict[tuple[int, str], str] = {}
+    subtopic_names_by_topic: dict[int, list[str]] = {}
+    for row in subtopic_rows:
+        topic_id = int(row["topic_id"])
+        sub_name = row["subtopic_name"]
+        names = subtopic_names_by_topic.setdefault(topic_id, [])
+        if sub_name not in names:
+            names.append(sub_name)
+        subtopic_assignment[(topic_id, row["youtube_video_id"])] = sub_name
+
+    def _bucket_topic(topic_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        names = subtopic_names_by_topic.get(topic_id, [])
+        bucketed: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+        unassigned: list[dict[str, Any]] = []
+        for ep in episodes_by_topic.get(topic_id, []):
+            sub = subtopic_assignment.get((topic_id, ep["youtube_video_id"]))
+            if sub is not None and sub in bucketed:
+                bucketed[sub].append(ep)
+            else:
+                unassigned.append(ep)
+        subtopic_payload = [
+            {"name": name, "episode_count": len(bucketed[name]), "episodes": bucketed[name]}
+            for name in names
+        ]
+        return subtopic_payload, unassigned
+
+    def _topic_payload(row: sqlite3.Row) -> dict[str, Any]:
+        topic_id = int(row["topic_id"])
+        subtopic_payload, unassigned = _bucket_topic(topic_id)
+        return {
+            "name": row["topic_name"],
+            "episode_count": int(row["episode_count"]),
+            "avg_confidence": (
+                float(row["avg_confidence"])
+                if row["avg_confidence"] is not None
+                else None
+            ),
+            "episodes": episodes_by_topic.get(topic_id, []),
+            "subtopics": subtopic_payload,
+            "subtopic_count": len(subtopic_payload),
+            "unassigned_within_topic": unassigned,
+        }
+
     return {
         "run_id": int(run_row["id"]),
         "model": run_row["model"],
@@ -2146,19 +2259,7 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
         "status": run_row["status"],
         "created_at": run_row["created_at"],
         "low_confidence_threshold": _load_low_confidence_threshold(),
-        "topics": [
-            {
-                "name": row["topic_name"],
-                "episode_count": int(row["episode_count"]),
-                "avg_confidence": (
-                    float(row["avg_confidence"])
-                    if row["avg_confidence"] is not None
-                    else None
-                ),
-                "episodes": episodes_by_topic.get(int(row["topic_id"]), []),
-            }
-            for row in topic_rows
-        ],
+        "topics": [_topic_payload(row) for row in topic_rows],
     }
 
 

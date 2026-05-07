@@ -27,6 +27,47 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-07 — Issue 03 / Ralph iteration 2: GUI subtopic drill-down on topic detail
+
+### Done (3 new tests in `test_discovery.py`)
+- Backend: `_build_discovery_topic_map` adds a second SQL pull on
+  `video_subtopics` (filtered by latest `discovery_run_id`), buckets each
+  topic's flat episode list into `subtopics: [{name, episode_count,
+  episodes}]` plus `unassigned_within_topic`, and exposes a
+  `subtopic_count` per topic. Existing `episodes` flat list preserved for
+  backward compat with sort + multi-topic tests.
+- Frontend: `renderDiscoverySubtopicBuckets` renders one `<details>` per
+  subtopic (collapsible, count pill in summary) plus an
+  "Unassigned within topic" bucket when present. Buckets sit above the
+  flat episode list inside each `discovery-topic-card`. Topic-card stats
+  gain a "Subtopics" tile alongside Episodes / Avg confidence.
+- CSS: `.discovery-subtopic-list`, `.discovery-subtopic-bucket`,
+  `.discovery-subtopic-unassigned` follow the existing dark/glass card
+  vocabulary.
+- `UI_REVISION` bumped to `2026-05-07.1-discovery-subtopic-drilldown`.
+- ROADMAP §A3 line 80 ticked with a postscript noting both halves
+  (episodes from iter 6 + subtopics from this iter).
+
+### Why this is unblocked now
+- §A2 line 80's deferral note was "subtopics deferred until §A2 LLM
+  produces them." Issue 03 / iteration 1 widened discovery to emit +
+  persist subtopics (`subtopics` + `video_subtopics` rows now populate
+  per run), so the UI half can land cleanly.
+
+### Verified
+- Verify gate: `test_discovery + test_extractor` 160 tests, ~35s, OK.
+- `node --check` test (`test_inline_script_parses_as_javascript`) stays
+  green — the new render function is small and uses the same
+  `JSON.stringify` / `escapeHtml` patterns as iter 6.
+
+### Next
+- Issue 03 acceptance: smoke test on a small real channel proving
+  topics produce ≥2 subtopics each. Requires real LLM (HITL trigger #1)
+  — not in scope for this iteration. Issue 03 is otherwise
+  acceptance-complete pending that smoke run.
+
+---
+
 ## 2026-05-07 — Issue 03 / Ralph iteration 1: widen discovery to emit + persist subtopics
 
 ### Done (TDD, 8 new tests in `test_discovery.py`)
