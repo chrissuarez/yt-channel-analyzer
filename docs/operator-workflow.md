@@ -1,0 +1,169 @@
+# Phase A operator workflow
+
+End-to-end recipe for going from a YouTube channel to a curated topic map.
+Phase A is metadata-only (titles, descriptions, chapters) — no transcripts.
+
+For background, see `PROJECT_SUMMARY.md` and `PRD_PHASE_A_TOPIC_MAP.md`.
+For per-command reference, see `YT_ANALYZER_CHEATSHEET.md`.
+
+---
+
+## 0. Prerequisites
+
+```bash
+cd /home/chris/.openclaw/workspace
+source .venv/bin/activate
+set -a; source .env; set +a   # exposes ANTHROPIC_API_KEY, YOUTUBE_API_KEY
+```
+
+The Phase A pipeline calls Anthropic (Haiku 4.5 by default) and the
+YouTube Data API. Real-LLM mode is gated by `RALPH_ALLOW_REAL_LLM=1`
+on top of `--stub`'s absence — see step 3.
+
+---
+
+## 1. Initialize the project DB
+
+One DB per channel/project. The init step writes schema + the primary
+channel row in one shot.
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli init-db \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  --channel-id UCGq-a57w-aPwyi3pW7XLiHw \
+  --channel-title "The Diary Of A CEO" \
+  --channel-handle "@thediaryofaceo"
+```
+
+If you only have the handle, run `fetch-channel` first to resolve it:
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli fetch-channel \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  "@thediaryofaceo"
+```
+
+---
+
+## 2. Ingest videos
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli fetch-videos \
+  --db-path ./tmp/doac.sqlite \
+  --limit 50
+```
+
+Sanity-check the ingest:
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli show-project-overview \
+  --db-path ./tmp/doac.sqlite
+```
+
+Trust `Video count:` in the overview — `show-videos` is a sample, not
+a full dump.
+
+---
+
+## 3. Run discovery
+
+`discover` is the Phase A topic-map pipeline: one batched LLM call
+proposes broad topics + subtopics and assigns each episode multi-topic
+with confidence and a short reason. Results are persisted under a
+`discovery_runs` row so re-runs are tracked.
+
+### Stub mode (free, deterministic, for development)
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  --stub
+```
+
+### Real-LLM mode (paid, ~$0.01 per 15 episodes on Haiku 4.5)
+
+There is no `--real` CLI flag yet (open follow-up). The supported
+real-LLM entry point is `.scratch/issue-02/smoke.py`, which sets
+`RALPH_ALLOW_REAL_LLM=1` internally and instruments token cost:
+
+```bash
+PYTHONPATH=. python3 yt_channel_analyzer/.scratch/issue-02/smoke.py
+```
+
+Read the file before running — it currently hardcodes
+`CHANNEL_INPUT="@TheDiaryOfACEO"` and writes to `/tmp/doac-smoke-<ts>.db`.
+Adapt or copy for other channels.
+
+---
+
+## 4. Review the topic map
+
+```bash
+PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
+  --db-path ./tmp/doac.sqlite
+```
+
+Default bind is `127.0.0.1:8000`. The Discovery view lists topics with
+episode counts; expand a topic to see its subtopics with per-subtopic
+counts; expand a subtopic to see assigned episodes with confidence,
+reason, and thumbnail.
+
+Low-confidence filter: assignments below `YTA_LOW_CONFIDENCE_THRESHOLD`
+(default `0.5`) get visually flagged. Tune with:
+
+```bash
+YTA_LOW_CONFIDENCE_THRESHOLD=0.6 \
+  PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
+  --db-path ./tmp/doac.sqlite
+```
+
+---
+
+## 5. Curate
+
+In the Discovery view, each episode card has **Wrong topic** and
+**Wrong subtopic** buttons. Clicking either:
+
+- Removes that assignment from `video_topics` / `video_subtopics`
+- Records the event in the `wrong_assignments` table for future
+  re-runs to learn from (slice 08 territory).
+
+For renames, splits, merges, and manual additions, fall through to
+the CLI taxonomy commands documented in `YT_ANALYZER_CHEATSHEET.md`
+§§ 2 + 4 (`create-topic`, `rename-topic`, `assign-topic`,
+`create-subtopic`, `rename-subtopic`, etc.).
+
+---
+
+## 6. Re-run discovery
+
+Discovery runs are append-only; each call writes a new
+`discovery_runs` row. The review UI shows the latest run's
+assignments. To compare runs, query `discovery_runs` directly:
+
+```bash
+sqlite3 ./tmp/doac.sqlite \
+  'SELECT id, created_at, model, prompt_version FROM discovery_runs ORDER BY id'
+```
+
+Sticky curation (decisions persisting across re-runs) is issue 08 —
+not yet wired.
+
+---
+
+## What's not in Phase A
+
+The legacy AI suggestion pipeline (`suggest-topics`,
+`suggest-subtopics`, `suggest-comparison-groups`) and the
+group-analysis pipeline (`fetch-group-transcripts`,
+`process-group-videos`, `analyze-comparison-group`,
+`export-group-markdown`) still exist in the CLI. They predate Phase A
+and target Phase C (transcripts, claims, group-level analysis). They
+are not part of the Phase A operator workflow and call sites that
+touch the moved-to-`legacy/` modules will print a `[legacy]` stderr
+warning.
+
+See `YT_ANALYZER_CHEATSHEET.md` §§ 3, 5, 6, 7, 8 if you need them.
