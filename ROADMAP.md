@@ -87,12 +87,12 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Document the sort-persistence decision (per-topic dropdown resets to recency on reload; not persisted) in the issue 09 spec — Decisions section (Ralph iteration 14)
 
 #### A4. Move legacy code
-- [ ] Create `legacy/` directory
-- [ ] Move `comparison_group_suggestions.py`, `group_analysis.py` to `legacy/`
-- [ ] Move group-related parts of `markdown_export.py` to `legacy/`
-- [ ] Move full-transcript pipeline parts of `processing.py` to `legacy/` (keep imports working from `legacy.processing` if anything still references them)
-- [ ] Remove comparison-group surfaces from the GUI primary navigation; keep behind an "Advanced / Legacy" disclosure if needed for backward access
-- [ ] Update `cli.py` so comparison-group commands still work but warn that they're legacy
+- [x] Create `legacy/` directory (package with empty `__init__.py`)
+- [x] Move `comparison_group_suggestions.py`, `group_analysis.py` to `legacy/`
+- [x] Move group-related parts of `markdown_export.py` to `legacy/` (whole file — every symbol is group-export code)
+- [x] Move full-transcript pipeline parts of `processing.py` to `legacy/` (whole file — `db.py` and `cli.py` import from `legacy.processing`)
+- [x] Remove comparison-group surfaces from the GUI primary navigation (page-header button + per-subtopic action button dropped; API routes + helpers + state payload kept intact for any external callers)
+- [x] Update `cli.py` so comparison-group commands still work but warn that they're legacy (`_warn_legacy()` stderr line on entry to all 21 group/comparison-group commands)
 
 #### A5. Documentation and operator guidance
 - [ ] Document the Phase A end-to-end operator workflow

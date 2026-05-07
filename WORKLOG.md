@@ -1171,3 +1171,22 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 ### Verified
 - Rendered script passes `node --check`.
 - Live page includes the safe single-quoted `onclick` and no longer includes the broken double-quoted handler.
+
+## 2026-05-07 — §A4 legacy code move (HITL, 6 commits)
+
+### What
+- Created `legacy/` package and moved 4 files: `comparison_group_suggestions.py`, `group_analysis.py`, `markdown_export.py`, `processing.py`. Updated importers in `db.py`, `cli.py`, `review_ui.py`, `test_transcripts.py` (one of which was a `unittest.mock.patch("yt_channel_analyzer.comparison_group_suggestions...")` string-path target).
+- Hid comparison-group entry points from the GUI primary nav (dropped page-header button + per-subtopic action button). API routes + helpers + state payload fields stayed untouched so any external callers keep working.
+- Added a one-line `[legacy]` stderr warning at the entry of all 21 CLI commands operating on the comparison-group / group-transcript / group-analysis / group-export concept.
+
+### Why
+- ROADMAP §A4. Phase A discovery is the new primary flow; comparison groups were the Phase C transcript-comparison surface, now demoted to legacy.
+
+### Decisions
+- Chose HITL over Ralph: 4 file moves was borderline-not-tripping the >5-files HITL trigger, but the string-path patch failure (caught only by `test_transcripts`, which the verify gate excludes) is exactly the silent-failure mode AFK Ralph would have missed.
+- Scoped CLI warnings to all 21 commands (not just the 9 that import moved code) — ROADMAP wording "comparison-group commands" reads broader than "commands that import legacy/".
+- GUI hide = remove buttons (not wrap in `<details>`). Routes still serve any non-UI caller, so no backward-access fallback was needed.
+
+### Verified
+- `discover` + `extractor` test gate green throughout (147 tests, ~33s).
+- `test_transcripts` holds at the same 2 pre-existing failures (49 tests, ~16s).
