@@ -1,0 +1,82 @@
+[smoke] mode=real db=/tmp/doac-smoke-real-20260507-221241.db
+[smoke] resolved channel: UCGq-a57w-aPwyi3pW7XLiHw (The Diary Of A CEO)
+[smoke] ingested 15 videos
+[smoke] discovery run 1 complete (17.0s)
+
+=== Discovered topics ===
+    4  conf=0.9  Sexual Health & Relationships
+    3  conf=0.88  Personal Development & Success
+    2  conf=0.9  Neuroscience & Brain Health
+    2  conf=0.93  Personal Finance & Wealth
+    2  conf=0.88  AI & Technology
+    2  conf=0.93  Geopolitics & Global Conflict
+
+=== Subtopic density per topic ===
+    2  AI & Technology
+    2  Geopolitics & Global Conflict
+    2  Neuroscience & Brain Health
+    3  Personal Development & Success
+    2  Personal Finance & Wealth
+    2  Sexual Health & Relationships
+  -- avg subtopics/topic: 2.17 (target ≥2.0 — issue 03 crit 6)
+
+=== Subtopics (within run) ===
+  [AI & Technology]
+      1  conf=0.9  AI Job Displacement & Economic Impact
+      1  conf=0.85  AI Ethics & Trustworthiness
+  [Geopolitics & Global Conflict]
+      1  conf=0.95  US-Iran Conflict & World War 3
+      1  conf=0.9  Global Power Dynamics
+  [Neuroscience & Brain Health]
+      1  conf=0.9  Brain Plasticity & Learning
+      1  conf=0.9  Decision-Making & Self-Control
+  [Personal Development & Success]
+      1  conf=0.85  Resilience & Handling Failure
+      1  conf=0.9  Ethical Success & Values
+      1  conf=0.9  Family & Relationships
+  [Personal Finance & Wealth]
+      1  conf=0.9  Investment Strategy & Wealth Building
+      1  conf=0.95  Home Ownership vs Renting
+  [Sexual Health & Relationships]
+      2  conf=0.85  Erectile Dysfunction & Performance
+      2  conf=0.95  Sexual Health Education
+
+=== Per-episode ===
+  [0.90] '6 BILLION PEOPLE WILL STARVE'                             -> Geopolitics & Global Conflict / Global Power Dynamics
+         reason: Title mentions global instability; guest is geopolitics expe
+  [0.95] 'Professor Jiang: World War 3 Has Already Begun, Let Me '  -> Geopolitics & Global Conflict / US-Iran Conflict & World War 3
+         reason: Title explicitly states 'World War 3 Has Already Begun'; ext
+  [0.85] '"IF YOU QUIT, YOU\'LL NEVER MAKE IT"'                     -> Personal Development & Success / Resilience & Handling Failure
+         reason: Title 'IF YOU QUIT, YOU'LL NEVER MAKE IT' focuses on perseve
+  [0.90] 'YOU CAN NEVER LOVE YOUR PARENTS TOO MUCH'                 -> Personal Development & Success / Family & Relationships
+         reason: Title 'YOU CAN NEVER LOVE YOUR PARENTS TOO MUCH' directly ad
+  [0.85] 'THE BIG AI LIE'                                           -> AI & Technology / AI Ethics & Trustworthiness
+         reason: Title 'THE BIG AI LIE' indicates discussion of deception in 
+  [0.90] 'Scott Galloway: AI Wasn’t Built For You. The Rich Don’t'  -> AI & Technology / AI Job Displacement & Economic Impact
+         reason: Guest discusses AI job apocalypse as marketing hype; explain
+  [0.85] 'THIS FOOD MAKES YOUR PENIS HARDER?!'                      -> Sexual Health & Relationships / Erectile Dysfunction & Performance
+         reason: Title references penis health and food's effect on sexual fu
+  [0.95] 'BUYING A HOUSE IS KEEPING YOU POOR'                       -> Personal Finance & Wealth / Home Ownership vs Renting
+         reason: Title 'BUYING A HOUSE IS KEEPING YOU POOR'; extensive discus
+  [0.90] 'Stock Expert: Becoming Rich Is Simple, But You Won’t Do'  -> Personal Finance & Wealth / Investment Strategy & Wealth Building
+         reason: Title 'Becoming Rich Is Simple'; discusses investing framewo
+  [0.85] 'DOES PENIS SIZE REALLY MATTER?'                           -> Sexual Health & Relationships / Erectile Dysfunction & Performance
+         reason: Title directly addresses penis size, a common sexual health 
+  [0.90] 'YOU WILL NEVER SEE DISCIPLINE THE SAME AGAIN'             -> Neuroscience & Brain Health / Decision-Making & Self-Control
+         reason: Guest discusses how brain controls behavior through neural n
+  [0.95] 'YOUR PENIS WILL SHRINK FOREVER'                           -> Sexual Health & Relationships / Sexual Health Education
+         reason: Guest is urologist discussing sexual health broadly; covers 
+  [0.95] 'Sex Expert: What Women Actually Need To Enjoy Sex'        -> Sexual Health & Relationships / Sexual Health Education
+         reason: Expert answers comprehensive sex questions; covers erectile 
+  [0.90] 'WINNING LIKE THIS IS FAILURE'                             -> Personal Development & Success / Ethical Success & Values
+         reason: Title 'WINNING LIKE THIS IS FAILURE'; guest discusses ethics
+  [0.90] 'SECRET BRAIN STRATEGIES BEHIND SUCCESS'                   -> Neuroscience & Brain Health / Brain Plasticity & Learning
+         reason: Neuroscientist discusses brain rewiring, perception, learnin
+  -- confidence: min=0.85 max=0.95 avg=0.90 spread=0.10 (issue 04 crit 5: expect variation)
+
+=== Cost ===
+  model         : claude-haiku-4-5-20251001
+  api calls     : 1
+  input tokens  : 8,939
+  output tokens : 2,006
+  est. cost USD : $0.0190  (Haiku 4.5: $1.0/M in, $5.0/M out)

@@ -99,7 +99,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 #### A5. Documentation and operator guidance
 - [x] Document the Phase A end-to-end operator workflow
 - [x] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
-- [ ] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel; also subsumes issue 04 criterion 5: validate model-emitted confidence + reason quality on a real channel)*
+- [x] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel — 2.17 avg; also subsumes issue 04 criterion 5: validate model-emitted confidence + reason quality on a real channel — spread 0.85–0.95, reasons grounded in titles; evidence: `.scratch/issue-10/doac-smoke-20260507-221241.log`)*
 
 ---
 
