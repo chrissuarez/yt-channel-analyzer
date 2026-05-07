@@ -1394,3 +1394,14 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - `test_schema_rejects_assignment_with_extra_keys` re-pointed: now passes valid `confidence` + `reason` plus an extra `priority` key (since `confidence` is now a real schema property after slice 04 iter 1).
 - `test_callable_round_trips_payload_via_extractor` expectation updated to threaded `reason="fixture"`.
 - Verify gate: 160 tests green (~35s).
+
+## 2026-05-07 — Slice 05 prompt + multi-topic stub (Ralph iter 1)
+
+- `_DISCOVERY_SYSTEM`: "exactly once" rule replaced with "at least once" + explicit anti-over-tagging clause ("most episodes should have a single assignment"); example JSON extended to show one `<id1>` with two `assignments` entries (different topics) so the model has an in-prompt template.
+- `DISCOVERY_PROMPT_VERSION` → `discovery-v4`. Schema unchanged (already permitted N rows per `youtube_video_id`).
+- New `STUB_SECONDARY_TOPIC_NAME = "Cross-cutting"`; `stub_llm` now emits N primary-topic rows + 1 secondary-topic row on `videos[0]` (confidence 0.6, no subtopic) so 2-video seeds yield 3 `video_topics` rows.
+- Re-pointed assignment-count assertions (3 sites: `test_discover_stub_creates_run_and_assignments`, `test_analyze_chains_setup_ingest_and_discover`, `test_llm_error_does_not_corrupt_prior_successful_run`) from 2→3.
+- `test_stub_llm_emits_one_subtopic_per_topic`: subtopic-presence assertion now filtered to primary-topic assignments (secondary entry has no subtopic).
+- `test_stub_llm_returns_one_topic_covering_all_videos` renamed + rewritten as `test_stub_llm_assigns_every_video_to_primary_and_one_to_secondary`.
+- Verify gate: 167 tests green (~36s).
+- Next iteration (slice 05 box 2): `_build_discovery_topic_map` per-episode `also_in: [<topic_name>, ...]` payload + JS card pill.

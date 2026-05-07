@@ -201,7 +201,7 @@ STUB_PROMPT_VERSION = "stub-v0"
 
 
 DISCOVERY_PROMPT_NAME = "discovery.topics"
-DISCOVERY_PROMPT_VERSION = "discovery-v3"
+DISCOVERY_PROMPT_VERSION = "discovery-v4"
 
 
 _DISCOVERY_SYSTEM = (
@@ -211,12 +211,22 @@ _DISCOVERY_SYSTEM = (
     "Reply with a single JSON object of the form:\n"
     '  {"topics": ["Topic A", "Topic B"], '
     '"subtopics": [{"name": "Sub A1", "parent_topic": "Topic A"}], '
-    '"assignments": [{"youtube_video_id": "<id>", "topic": "Topic A", '
+    '"assignments": [\n'
+    '    {"youtube_video_id": "<id1>", "topic": "Topic A", '
     '"subtopic": "Sub A1", "confidence": 0.85, '
-    '"reason": "matched chapter title \'Sub A1\'"}]}\n'
+    '"reason": "matched chapter title \'Sub A1\'"},\n'
+    '    {"youtube_video_id": "<id1>", "topic": "Topic B", '
+    '"confidence": 0.6, '
+    '"reason": "second half discusses Topic B"}\n'
+    "  ]}\n"
     "\n"
     "Rules:\n"
-    "- Every supplied episode must appear exactly once in `assignments`.\n"
+    "- Every supplied episode must appear in `assignments` at least once.\n"
+    "- An episode may have multiple `assignments` entries with different "
+    "`topic` values when it genuinely covers each topic. Only do this "
+    "when the episode meaningfully covers each — secondary topics should "
+    "be the exception, not the default. Do not over-tag: most episodes "
+    "should have a single assignment.\n"
     "- Every `topic` in `assignments` must also appear in `topics`.\n"
     "- Choose 3-12 broad topics; reuse one topic across many episodes.\n"
     "- Propose 2-6 subtopics per topic; each subtopic's `parent_topic` "
@@ -402,32 +412,45 @@ def make_real_llm_callable(
 
 
 STUB_SUBTOPIC_NAME = "General sub"
+STUB_SECONDARY_TOPIC_NAME = "Cross-cutting"
 
 
 def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
-    """Hardcoded LLM stub: one topic + one subtopic, every video assigned.
-
-    Used by `discover --stub` to wire the end-to-end pipeline without
-    spending tokens. Real LLM lands in slice 02; subtopic shape ships
-    in slice 03.
+    """Hardcoded LLM stub: every video gets a primary-topic assignment, and
+    the first video carries a second assignment under a secondary topic so
+    the multi-topic display path is exercisable without spending tokens.
     """
+    primary_assignments = [
+        DiscoveryAssignment(
+            youtube_video_id=video.youtube_video_id,
+            topic_name=STUB_TOPIC_NAME,
+            confidence=1.0,
+            reason="stub assignment",
+            subtopic_name=STUB_SUBTOPIC_NAME,
+        )
+        for video in videos
+    ]
+    secondary_assignments = (
+        [
+            DiscoveryAssignment(
+                youtube_video_id=videos[0].youtube_video_id,
+                topic_name=STUB_SECONDARY_TOPIC_NAME,
+                confidence=0.6,
+                reason="stub multi-topic assignment",
+                subtopic_name=None,
+            )
+        ]
+        if videos
+        else []
+    )
     return DiscoveryPayload(
-        topics=[STUB_TOPIC_NAME],
+        topics=[STUB_TOPIC_NAME, STUB_SECONDARY_TOPIC_NAME],
         subtopics=[
             DiscoverySubtopic(
                 name=STUB_SUBTOPIC_NAME, parent_topic=STUB_TOPIC_NAME
             )
         ],
-        assignments=[
-            DiscoveryAssignment(
-                youtube_video_id=video.youtube_video_id,
-                topic_name=STUB_TOPIC_NAME,
-                confidence=1.0,
-                reason="stub assignment",
-                subtopic_name=STUB_SUBTOPIC_NAME,
-            )
-            for video in videos
-        ],
+        assignments=primary_assignments + secondary_assignments,
     )
 
 

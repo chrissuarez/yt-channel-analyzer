@@ -756,8 +756,14 @@ class DiscoveryVideoChaptersTests(unittest.TestCase):
 
 
 class StubLLMTests(unittest.TestCase):
-    def test_stub_llm_returns_one_topic_covering_all_videos(self) -> None:
-        from yt_channel_analyzer.discovery import DiscoveryVideo
+    def test_stub_llm_assigns_every_video_to_primary_and_one_to_secondary(
+        self,
+    ) -> None:
+        from yt_channel_analyzer.discovery import (
+            STUB_SECONDARY_TOPIC_NAME,
+            STUB_TOPIC_NAME,
+            DiscoveryVideo,
+        )
 
         videos = [
             DiscoveryVideo(
@@ -774,13 +780,30 @@ class StubLLMTests(unittest.TestCase):
             ),
         ]
         payload = stub_llm(videos)
-        self.assertEqual(len(payload.topics), 1)
-        topic = payload.topics[0]
-        assigned_ids = {a.youtube_video_id for a in payload.assignments}
-        self.assertEqual(assigned_ids, {"vid1", "vid2"})
-        for assignment in payload.assignments:
-            self.assertEqual(assignment.topic_name, topic)
+        self.assertEqual(
+            set(payload.topics), {STUB_TOPIC_NAME, STUB_SECONDARY_TOPIC_NAME}
+        )
+
+        primary = [
+            a for a in payload.assignments if a.topic_name == STUB_TOPIC_NAME
+        ]
+        secondary = [
+            a
+            for a in payload.assignments
+            if a.topic_name == STUB_SECONDARY_TOPIC_NAME
+        ]
+
+        self.assertEqual(
+            {a.youtube_video_id for a in primary}, {"vid1", "vid2"}
+        )
+        for assignment in primary:
             self.assertEqual(assignment.confidence, 1.0)
+
+        # Exactly one video carries a secondary-topic assignment so the
+        # multi-topic display path can be exercised without paying for
+        # an LLM. The same video appears in both topic buckets.
+        self.assertEqual(len(secondary), 1)
+        self.assertIn(secondary[0].youtube_video_id, {"vid1", "vid2"})
 
 
 class DiscoverCLITests(unittest.TestCase):
@@ -816,7 +839,8 @@ class DiscoverCLITests(unittest.TestCase):
                     "FROM video_topics WHERE discovery_run_id = ?",
                     (run["id"],),
                 ).fetchall()
-                self.assertEqual(len(assignments), 2)
+                # 2 primary-topic rows + 1 secondary-topic row from stub_llm
+                self.assertEqual(len(assignments), 3)
                 for row in assignments:
                     self.assertEqual(row["assignment_source"], "auto")
 
@@ -935,7 +959,8 @@ class AnalyzeCLITests(unittest.TestCase):
                     "WHERE discovery_run_id = ?",
                     (runs[0]["id"],),
                 ).fetchall()
-                self.assertEqual(len(assignments), 2)
+                # 2 primary-topic rows + 1 secondary-topic row from stub_llm
+                self.assertEqual(len(assignments), 3)
                 for row in assignments:
                     self.assertEqual(row["assignment_source"], "auto")
 
@@ -3817,11 +3842,12 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
                 self.assertEqual(runs[1]["status"], "error")
 
                 # The successful run's assignments are still intact.
+                # 2 primary-topic rows + 1 secondary-topic row from stub_llm
                 first_run_assignments = conn.execute(
                     "SELECT video_id FROM video_topics WHERE discovery_run_id = ?",
                     (ok_run_id,),
                 ).fetchall()
-                self.assertEqual(len(first_run_assignments), 2)
+                self.assertEqual(len(first_run_assignments), 3)
 
 
 class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
@@ -4106,8 +4132,13 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
             [(s.name, s.parent_topic) for s in payload.subtopics],
             [(STUB_SUBTOPIC_NAME, STUB_TOPIC_NAME)],
         )
+        # Only primary-topic assignments carry the stub subtopic; the
+        # secondary-topic multi-topic assignment has no subtopic.
         for assignment in payload.assignments:
-            self.assertEqual(assignment.subtopic_name, STUB_SUBTOPIC_NAME)
+            if assignment.topic_name == STUB_TOPIC_NAME:
+                self.assertEqual(assignment.subtopic_name, STUB_SUBTOPIC_NAME)
+            else:
+                self.assertIsNone(assignment.subtopic_name)
 
     def test_payload_from_extractor_response_carries_subtopics(self) -> None:
         from yt_channel_analyzer.discovery import (
