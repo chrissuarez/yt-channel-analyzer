@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from yt_channel_analyzer.cli import main
-from yt_channel_analyzer.comparison_group_suggestions import (
+from yt_channel_analyzer.legacy.comparison_group_suggestions import (
     SuggestedComparisonGroupLabel,
     VideoComparisonGroupSuggestion,
     _build_prompt as _build_comparison_group_prompt,
@@ -1930,7 +1930,7 @@ class ComparisonGroupSuggestionTests(unittest.TestCase):
             def __init__(self):
                 self.responses = FakeResponses()
 
-        with patch("yt_channel_analyzer.comparison_group_suggestions._get_openai_client", return_value=FakeClient()):
+        with patch("yt_channel_analyzer.legacy.comparison_group_suggestions._get_openai_client", return_value=FakeClient()):
             suggestion = suggest_comparison_groups_for_video(
                 project_name="proj",
                 broad_topic_name="Health & Wellness",

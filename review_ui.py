@@ -51,7 +51,7 @@ from yt_channel_analyzer.db import (
     summarize_subtopic_suggestion_labels,
     summarize_topic_suggestion_labels,
 )
-from yt_channel_analyzer.comparison_group_suggestions import suggest_comparison_groups_for_video
+from yt_channel_analyzer.legacy.comparison_group_suggestions import suggest_comparison_groups_for_video
 from yt_channel_analyzer.subtopic_suggestions import suggest_subtopics_for_video
 from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
