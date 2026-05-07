@@ -97,7 +97,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 #### A5. Documentation and operator guidance
 - [ ] Document the Phase A end-to-end operator workflow
 - [ ] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
-- [ ] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map
+- [ ] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel)*
 
 ---
 

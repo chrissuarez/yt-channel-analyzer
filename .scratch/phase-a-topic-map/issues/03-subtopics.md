@@ -1,6 +1,6 @@
 # 03 — Subtopics in discovery + GUI drill-down
 
-Status: needs-triage
+Status: done (criteria 1-5); criterion 6 re-homed under §A5 / issue 10
 Type: AFK
 User stories covered: 4, 5
 Roadmap sections: §A2, §A3
@@ -20,7 +20,7 @@ Extend discovery to also propose subtopics under each broad topic, and assign ep
 - [ ] `video_subtopics` rows persisted alongside `video_topics`
 - [ ] GUI: topic map view drills into a topic detail view that lists subtopics with counts; clicking a subtopic shows the assigned episode list
 - [ ] Episodes can have a topic but no subtopic (display them as "unassigned within topic")
-- [ ] Smoke test: a small real channel produces topics with at least 2 subtopics each
+- [ ] Smoke test: a small real channel produces topics with at least 2 subtopics each *(re-homed: validated under §A5 / issue 10's first real DOAC run rather than as a standalone slice-03 smoke)*
 
 ## Blocked by
 
