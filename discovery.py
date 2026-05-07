@@ -201,7 +201,7 @@ STUB_PROMPT_VERSION = "stub-v0"
 
 
 DISCOVERY_PROMPT_NAME = "discovery.topics"
-DISCOVERY_PROMPT_VERSION = "discovery-v2"
+DISCOVERY_PROMPT_VERSION = "discovery-v3"
 
 
 _DISCOVERY_SYSTEM = (
@@ -212,7 +212,8 @@ _DISCOVERY_SYSTEM = (
     '  {"topics": ["Topic A", "Topic B"], '
     '"subtopics": [{"name": "Sub A1", "parent_topic": "Topic A"}], '
     '"assignments": [{"youtube_video_id": "<id>", "topic": "Topic A", '
-    '"subtopic": "Sub A1"}]}\n'
+    '"subtopic": "Sub A1", "confidence": 0.85, '
+    '"reason": "matched chapter title \'Sub A1\'"}]}\n'
     "\n"
     "Rules:\n"
     "- Every supplied episode must appear exactly once in `assignments`.\n"
@@ -222,6 +223,10 @@ _DISCOVERY_SYSTEM = (
     "must appear in `topics`.\n"
     "- For each assignment, pick a `subtopic` whose `parent_topic` matches "
     "the assignment's `topic`. Omit `subtopic` if no subtopic fits.\n"
+    "- For each assignment, supply `confidence` between 0.0 and 1.0 "
+    "reflecting how strongly the episode fits the topic, and a short "
+    "`reason` string (e.g. \"title contains 'sleep'\", \"matched chapter "
+    "title 'Gut Microbiome'\") explaining the placement.\n"
     "- Output JSON only — no prose, no markdown fences."
 )
 
@@ -253,11 +258,22 @@ _DISCOVERY_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["youtube_video_id", "topic"],
+                "required": [
+                    "youtube_video_id",
+                    "topic",
+                    "confidence",
+                    "reason",
+                ],
                 "properties": {
                     "youtube_video_id": {"type": "string"},
                     "topic": {"type": "string"},
                     "subtopic": {"type": "string"},
+                    "confidence": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1,
+                    },
+                    "reason": {"type": "string", "minLength": 1},
                 },
             },
         },

@@ -27,6 +27,54 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-07 — Issue 04 / Ralph iteration 1: widen discovery schema + prompt for confidence + reason
+
+### Done
+- `_DISCOVERY_SCHEMA` assignment items now `required: [youtube_video_id,
+  topic, confidence, reason]`. `confidence` is `{type: number, minimum: 0,
+  maximum: 1}` and `reason` is `{type: string, minLength: 1}`. Schema stays
+  `additionalProperties: false` everywhere. Note: the project's minimal
+  validator (`extractor/schema.py`) currently honors `type`/`required`/
+  `additionalProperties` but ignores `minimum`/`maximum`/`minLength` — those
+  numeric/length bounds will be enforced by slice 04 payload threading
+  (or a small validator extension) in the next sub-plan.
+- `_DISCOVERY_SYSTEM` prompt now asks the model for `confidence` (0.0–1.0)
+  and a short `reason` per assignment; the example JSON in the system
+  message includes `"confidence": 0.85, "reason": "matched chapter title
+  'Sub A1'"` so Haiku has an unfenced shape to mirror (slice 02 lesson).
+- `DISCOVERY_PROMPT_VERSION` bumped `discovery-v2` → `discovery-v3`.
+- Test fixtures: 3 `runner.add_response` sites + 2 inline schema-accept
+  tests in `test_discovery.py` updated to carry `confidence`/`reason` on
+  each assignment so the verify gate stays green. `_payload_from_response`
+  is unchanged (still hardcodes `1.0`/`""` until iter 2), so the
+  round-trip test's existing assertions hold.
+
+### Deferred to iter 2 (slice 04 payload threading)
+- `_payload_from_response` should read `confidence`/`reason` from the
+  response item.
+- `stub_llm` keeps `confidence=1.0` but the existing `"stub assignment"`
+  reason becomes the actually-threaded value.
+- `test_schema_rejects_assignment_with_extra_keys` is currently green
+  for the wrong reason (assignment is missing required `reason`, not
+  because `confidence` is unknown) — re-point the rejected key to
+  `priority`/`weight` so the assertion fires for the test's stated
+  reason.
+- New positive tests: schema accepts confidence+reason, rejects either
+  missing, rejects out-of-range/empty (latter likely needs validator
+  extension); round-trip + persistence tests asserting the LLM-emitted
+  values land in `video_topics`/`video_subtopics`.
+
+### Verified
+- `.ralph/verify.sh` (test_discovery + test_extractor): 160 tests, ~35s,
+  OK.
+
+### Smoke (recommended pre-merge, not in this AFK loop)
+- `.scratch/issue-02/smoke.py` is the fastest way to confirm the new
+  prompt version still parses on Haiku — but it's a real-LLM HITL
+  trigger, so leave it for an attended run after iter 2 ships.
+
+---
+
 ## 2026-05-07 — Issue 03 / Ralph iteration 2: GUI subtopic drill-down on topic detail
 
 ### Done (3 new tests in `test_discovery.py`)

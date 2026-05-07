@@ -3293,7 +3293,12 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
             {
                 "topics": ["Health"],
                 "assignments": [
-                    {"youtube_video_id": "vidA", "topic": "Health"},
+                    {
+                        "youtube_video_id": "vidA",
+                        "topic": "Health",
+                        "confidence": 0.9,
+                        "reason": "fixture",
+                    },
                 ],
             },
             prompt.schema,
@@ -3350,6 +3355,8 @@ class DiscoveryPromptRegistrationTests(_RegistryIsolation):
                         "youtube_video_id": "vidA",
                         "topic": "Health",
                         "subtopic": "Sleep",
+                        "confidence": 0.9,
+                        "reason": "fixture",
                     },
                 ],
             },
@@ -3398,8 +3405,18 @@ class ExtractorBackedLLMTests(_RegistryIsolation):
             {
                 "topics": ["Health", "Business"],
                 "assignments": [
-                    {"youtube_video_id": "vid1", "topic": "Health"},
-                    {"youtube_video_id": "vid2", "topic": "Business"},
+                    {
+                        "youtube_video_id": "vid1",
+                        "topic": "Health",
+                        "confidence": 1.0,
+                        "reason": "fixture",
+                    },
+                    {
+                        "youtube_video_id": "vid2",
+                        "topic": "Business",
+                        "confidence": 1.0,
+                        "reason": "fixture",
+                    },
                 ],
             },
         )
@@ -3455,7 +3472,14 @@ class ExtractorBackedLLMTests(_RegistryIsolation):
             DISCOVERY_PROMPT_VERSION,
             {
                 "topics": ["T"],
-                "assignments": [{"youtube_video_id": "vidX", "topic": "T"}],
+                "assignments": [
+                    {
+                        "youtube_video_id": "vidX",
+                        "topic": "T",
+                        "confidence": 1.0,
+                        "reason": "fixture",
+                    }
+                ],
             },
         )
 
@@ -3941,6 +3965,8 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
                             "youtube_video_id": "vid1",
                             "topic": "Health",
                             "subtopic": "Sleep",
+                            "confidence": 1.0,
+                            "reason": "fixture",
                         },
                     ],
                 },
