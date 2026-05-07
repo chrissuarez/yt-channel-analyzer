@@ -1405,3 +1405,12 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - `test_stub_llm_returns_one_topic_covering_all_videos` renamed + rewritten as `test_stub_llm_assigns_every_video_to_primary_and_one_to_secondary`.
 - Verify gate: 167 tests green (~36s).
 - Next iteration (slice 05 box 2): `_build_discovery_topic_map` per-episode `also_in: [<topic_name>, ...]` payload + JS card pill.
+
+## 2026-05-07 — Slice 05 multi-topic "also in" pill (Ralph iter 2)
+
+- `_build_discovery_topic_map`: precompute `topic_id_to_name` from `topic_rows`, walk `episode_rows` once to build `topics_by_video: dict[video_id, list[topic_name]]`, then stamp each per-topic episode dict with `also_in` (other topics, current topic excluded; `[]` when single-topic — never null). No extra SQL.
+- JS `renderDiscoveryEpisodeItem` gains 4th arg `showAlsoIn`; only the top-level topic episode list (line ~1150) passes `true`. Subtopic drill-down + unassigned-within-topic buckets stay pill-free per overlay scope.
+- Inline pill rendered inside `.discovery-episode-meta` next to confidence/id; new `.discovery-episode-also-in` CSS (rounded muted chip) lives alongside the existing inline-meta classes.
+- Tests: `test_state_payload_episode_dicts_carry_also_in_for_multi_topic` (vid1 in Health+Business; vid2 only in Business; assertions cover both directions of also_in + empty list invariant); `test_html_page_renders_also_in_pill_for_multi_topic_episodes` (CSS class + literal `also in:` string ship in the rendered HTML).
+- Verify gate: 169 tests green (~36s; +2 vs prior iter).
+- Issue 05 acceptance criteria 1, 2, 3, 4, 5 now all met (criterion 3 — same episode in both topic lists — is a virtue of multi-row `video_topics` + the iter 1 stub fixture; covered by the new also_in test which traverses both topic.episodes lists).

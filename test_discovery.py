@@ -1106,6 +1106,56 @@ class DiscoveryStatePayloadTests(unittest.TestCase):
             names = {t["name"] for t in topic_map["topics"]}
             self.assertEqual(names, {"Fresh Topic"})
 
+    def test_state_payload_episode_dicts_carry_also_in_for_multi_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Business",
+                        confidence=0.4,
+                        reason="brain-as-startup metaphor",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topics_by_name = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }
+            health_eps = {ep["youtube_video_id"]: ep for ep in topics_by_name["Health"]["episodes"]}
+            business_eps = {ep["youtube_video_id"]: ep for ep in topics_by_name["Business"]["episodes"]}
+            # vid1 sits in both topics → each card reports the *other* topic.
+            self.assertEqual(health_eps["vid1"]["also_in"], ["Business"])
+            self.assertEqual(business_eps["vid1"]["also_in"], ["Health"])
+            # vid2 only in Business → empty list, never null.
+            self.assertEqual(business_eps["vid2"]["also_in"], [])
+
 
 class DiscoveryTopicMapHTMLTests(unittest.TestCase):
     def test_html_page_contains_discovery_topic_map_section(self) -> None:
@@ -1128,6 +1178,13 @@ class DiscoveryTopicMapHTMLTests(unittest.TestCase):
         from yt_channel_analyzer.review_ui import UI_REVISION
 
         self.assertIn("discovery", UI_REVISION)
+
+    def test_html_page_renders_also_in_pill_for_multi_topic_episodes(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-episode-also-in", html)
+        self.assertIn("also in:", html)
 
     def test_inline_script_parses_as_javascript(self) -> None:
         """Run `node --check` on the rendered inline <script>. Catches JS

@@ -338,6 +338,13 @@ HTML_PAGE = """<!doctype html>
       color: var(--good);
     }
     .discovery-episode.low .discovery-episode-confidence { color: var(--bad); }
+    .discovery-episode-also-in {
+      font-size: 11px;
+      color: var(--muted);
+      background: rgba(148, 163, 184, 0.12);
+      border-radius: 999px;
+      padding: 1px 8px;
+    }
     .discovery-episode-reason {
       margin-top: 4px;
       font-size: 12px;
@@ -1147,7 +1154,7 @@ HTML_PAGE = """<!doctype html>
         const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
         const sortedEpisodes = sortDiscoveryEpisodes(topic.episodes, sortMode);
         const episodeListHtml = sortedEpisodes.length
-          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold)).join('')}</ol>`
+          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold, true)).join('')}</ol>`
           : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
         const sortRowHtml = (topic.episodes && topic.episodes.length)
           ? `<div class="discovery-episode-sort-row">
@@ -1226,7 +1233,7 @@ HTML_PAGE = """<!doctype html>
       return `<div class="discovery-subtopic-list">${bucketHtml}${unassignedHtml}</div>`;
     }
 
-    function renderDiscoveryEpisodeItem(episode, topicName, lowThreshold) {
+    function renderDiscoveryEpisodeItem(episode, topicName, lowThreshold, showAlsoIn) {
       const threshold = (typeof lowThreshold === 'number') ? lowThreshold : 0.5;
       const c = (episode.confidence == null) ? null : Math.max(0, Math.min(1, episode.confidence));
       const pct = (c == null) ? '—' : `${Math.round(c * 100)}%`;
@@ -1242,6 +1249,10 @@ HTML_PAGE = """<!doctype html>
                    type="button"
                    onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(episode.youtube_video_id || '')}, null)'>Wrong topic?</button>`
         : '';
+      const alsoIn = (showAlsoIn && Array.isArray(episode.also_in)) ? episode.also_in : [];
+      const alsoInHtml = alsoIn.length
+        ? `<span class="discovery-episode-also-in">also in: ${alsoIn.map((name) => escapeHtml(name)).join(', ')}</span>`
+        : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -1250,6 +1261,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">${escapeHtml(pct)}</span>
               <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
+              ${alsoInHtml}
             </div>
             ${reasonHtml}
             ${wrongButton}
@@ -2194,9 +2206,28 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
             (run_row["id"],),
         ).fetchall()
 
+    topic_id_to_name: dict[int, str] = {
+        int(row["topic_id"]): row["topic_name"] for row in topic_rows
+    }
+    topics_by_video: dict[str, list[str]] = {}
+    for row in episode_rows:
+        topic_name = topic_id_to_name.get(int(row["topic_id"]))
+        if topic_name is None:
+            continue
+        names = topics_by_video.setdefault(row["youtube_video_id"], [])
+        if topic_name not in names:
+            names.append(topic_name)
+
     episodes_by_topic: dict[int, list[dict[str, Any]]] = {}
     for row in episode_rows:
-        episodes_by_topic.setdefault(int(row["topic_id"]), []).append(
+        topic_id = int(row["topic_id"])
+        current_topic_name = topic_id_to_name.get(topic_id)
+        also_in = [
+            name
+            for name in topics_by_video.get(row["youtube_video_id"], [])
+            if name != current_topic_name
+        ]
+        episodes_by_topic.setdefault(topic_id, []).append(
             {
                 "youtube_video_id": row["youtube_video_id"],
                 "title": row["title"],
@@ -2206,6 +2237,7 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
                     float(row["confidence"]) if row["confidence"] is not None else None
                 ),
                 "reason": row["reason"],
+                "also_in": also_in,
             }
         )
 
