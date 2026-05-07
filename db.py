@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from yt_channel_analyzer.legacy.group_analysis import GroupAnalysisArtifact
-from yt_channel_analyzer.processing import ProcessedVideoArtifact, TranscriptChunk
+from yt_channel_analyzer.legacy.processing import ProcessedVideoArtifact, TranscriptChunk
 from yt_channel_analyzer.legacy.comparison_group_suggestions import VideoComparisonGroupSuggestion
 from yt_channel_analyzer.subtopic_suggestions import VideoSubtopicSuggestion
 from yt_channel_analyzer.topic_suggestions import VideoTopicSuggestion
