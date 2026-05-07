@@ -1,12 +1,14 @@
-"""Issue 02 smoke test: ingest a real channel, run real-LLM discovery, print
-topics + cost.
+"""Issue 02 / §A5 smoke: ingest a real channel, run discovery (real or stub),
+print topics + subtopics + per-episode confidence/reason + cost.
 
 Ad-hoc, not part of the test suite. Run from `~/.openclaw/workspace` with the
-venv active. Sets RALPH_ALLOW_REAL_LLM=1 internally — this is *the* HITL
-boundary for slice 02; the verify gate must never set it.
+venv active.
 
-    cd ~/.openclaw/workspace
-    source .venv/bin/activate
+    # Stub mode (free, deterministic — sanity-checks wiring on a /tmp DB)
+    PYTHONPATH=. python3 yt_channel_analyzer/.scratch/issue-02/smoke.py --stub
+
+    # Real-LLM mode (HITL boundary; sets RALPH_ALLOW_REAL_LLM=1 internally —
+    # the verify gate must never set it)
     PYTHONPATH=. python3 yt_channel_analyzer/.scratch/issue-02/smoke.py
 
 Reads ANTHROPIC_API_KEY and YOUTUBE_API_KEY from
@@ -20,7 +22,10 @@ import sys
 import time
 from pathlib import Path
 
-os.environ["RALPH_ALLOW_REAL_LLM"] = "1"
+USE_STUB = "--stub" in sys.argv[1:]
+
+if not USE_STUB:
+    os.environ["RALPH_ALLOW_REAL_LLM"] = "1"
 
 ENV_FILE = Path("/home/chris/.openclaw/workspace/.env")
 if ENV_FILE.exists():
@@ -39,6 +44,7 @@ from yt_channel_analyzer.discovery import (
     DISCOVERY_PROMPT_VERSION,
     make_real_llm_callable,
     run_discovery,
+    stub_llm,
 )
 from yt_channel_analyzer.extractor import anthropic_runner as ar
 from yt_channel_analyzer.youtube import (
@@ -78,9 +84,10 @@ ar.AnthropicRunner.run_single = _patched_run_single
 
 
 def main() -> int:
+    mode = "stub" if USE_STUB else "real"
     ts = time.strftime("%Y%m%d-%H%M%S")
-    db_path = Path(f"/tmp/doac-smoke-{ts}.db")
-    print(f"[smoke] db={db_path}")
+    db_path = Path(f"/tmp/doac-smoke-{mode}-{ts}.db")
+    print(f"[smoke] mode={mode} db={db_path}")
 
     canonical = resolve_canonical_channel_id(CHANNEL_INPUT)
     metadata = fetch_channel_metadata(canonical)
@@ -99,8 +106,11 @@ def main() -> int:
     print(f"[smoke] ingested {len(videos)} videos")
 
     started = time.time()
-    with connect(db_path) as conn:
-        llm = make_real_llm_callable(conn)
+    if USE_STUB:
+        llm = stub_llm
+    else:
+        with connect(db_path) as conn:
+            llm = make_real_llm_callable(conn)
     run_id = run_discovery(
         db_path,
         project_name=PROJECT,
@@ -115,7 +125,7 @@ def main() -> int:
         conn.row_factory = sqlite3.Row
         topics = conn.execute(
             """
-            SELECT t.name, COUNT(vt.video_id) AS episodes,
+            SELECT t.id, t.name, COUNT(vt.video_id) AS episodes,
                    ROUND(AVG(vt.confidence), 2) AS avg_conf
             FROM video_topics vt
             JOIN topics t ON t.id = vt.topic_id
@@ -125,9 +135,39 @@ def main() -> int:
             """,
             (run_id,),
         ).fetchall()
+        # Subtopic density: distinct subtopics-with-assignments per topic.
+        subtopic_density = conn.execute(
+            """
+            SELECT t.id AS topic_id, t.name AS topic,
+                   COUNT(DISTINCT s.id) AS subtopic_count
+            FROM video_subtopics vs
+            JOIN subtopics s ON s.id = vs.subtopic_id
+            JOIN topics t ON t.id = s.topic_id
+            WHERE vs.discovery_run_id = ?
+            GROUP BY t.id
+            ORDER BY t.name COLLATE NOCASE
+            """,
+            (run_id,),
+        ).fetchall()
+        # Per-subtopic assignment counts within this run.
+        subtopics = conn.execute(
+            """
+            SELECT t.name AS topic, s.name AS subtopic,
+                   COUNT(vs.video_id) AS episodes,
+                   ROUND(AVG(vs.confidence), 2) AS avg_conf
+            FROM video_subtopics vs
+            JOIN subtopics s ON s.id = vs.subtopic_id
+            JOIN topics t ON t.id = s.topic_id
+            WHERE vs.discovery_run_id = ?
+            GROUP BY s.id
+            ORDER BY t.name COLLATE NOCASE, episodes DESC
+            """,
+            (run_id,),
+        ).fetchall()
         per_episode = conn.execute(
             """
-            SELECT v.title, t.name AS topic, vt.confidence, vt.reason
+            SELECT v.id AS vid, v.title, t.name AS topic,
+                   vt.confidence, vt.reason
             FROM video_topics vt
             JOIN topics t ON t.id = vt.topic_id
             JOIN videos v ON v.id = vt.video_id
@@ -136,29 +176,80 @@ def main() -> int:
             """,
             (run_id,),
         ).fetchall()
+        # Subtopic assignments keyed by (video_id, topic_name).
+        per_episode_subs = conn.execute(
+            """
+            SELECT vs.video_id AS vid, t.name AS topic, s.name AS subtopic
+            FROM video_subtopics vs
+            JOIN subtopics s ON s.id = vs.subtopic_id
+            JOIN topics t ON t.id = s.topic_id
+            WHERE vs.discovery_run_id = ?
+            """,
+            (run_id,),
+        ).fetchall()
+
+    sub_lookup: dict[tuple[int, str], list[str]] = {}
+    for row in per_episode_subs:
+        sub_lookup.setdefault((row["vid"], row["topic"]), []).append(row["subtopic"])
 
     print()
     print("=== Discovered topics ===")
     for row in topics:
         print(f"  {row['episodes']:>3}  conf={row['avg_conf']}  {row['name']}")
+
+    total_topics = len(subtopic_density) or len(topics) or 1
+    total_subs = sum(r["subtopic_count"] for r in subtopic_density)
+    avg_density = total_subs / total_topics if total_topics else 0.0
+    print()
+    print("=== Subtopic density per topic ===")
+    for row in subtopic_density:
+        print(f"  {row['subtopic_count']:>3}  {row['topic']}")
+    print(f"  -- avg subtopics/topic: {avg_density:.2f} (target ≥2.0 — issue 03 crit 6)")
+
+    print()
+    print("=== Subtopics (within run) ===")
+    last_topic = None
+    for row in subtopics:
+        if row["topic"] != last_topic:
+            print(f"  [{row['topic']}]")
+            last_topic = row["topic"]
+        print(f"    {row['episodes']:>3}  conf={row['avg_conf']}  {row['subtopic']}")
+
     print()
     print("=== Per-episode ===")
+    confs: list[float] = []
     for row in per_episode:
-        title = (row["title"] or "")[:60]
+        conf = row["confidence"]
+        if conf is not None:
+            confs.append(conf)
+        title = (row["title"] or "")[:55]
         reason = (row["reason"] or "")[:60]
-        print(f"  [{row['confidence']:.2f}] {title!r:62}  -> {row['topic']}  // {reason}")
+        subs = sub_lookup.get((row["vid"], row["topic"]), [])
+        sub_str = ", ".join(subs) if subs else "—"
+        conf_str = f"{conf:.2f}" if conf is not None else "  - "
+        print(f"  [{conf_str}] {title!r:57}  -> {row['topic']} / {sub_str}")
+        if reason:
+            print(f"         reason: {reason}")
+    if confs:
+        cmin, cmax = min(confs), max(confs)
+        cavg = sum(confs) / len(confs)
+        print(
+            f"  -- confidence: min={cmin:.2f} max={cmax:.2f} avg={cavg:.2f} "
+            f"spread={cmax - cmin:.2f} (issue 04 crit 5: expect variation)"
+        )
 
-    cost = (
-        USAGE["input_tokens"] * HAIKU_INPUT_PER_M / 1_000_000
-        + USAGE["output_tokens"] * HAIKU_OUTPUT_PER_M / 1_000_000
-    )
-    print()
-    print("=== Cost ===")
-    print(f"  model         : {ar.DEFAULT_MODEL}")
-    print(f"  api calls     : {USAGE['calls']}")
-    print(f"  input tokens  : {USAGE['input_tokens']:,}")
-    print(f"  output tokens : {USAGE['output_tokens']:,}")
-    print(f"  est. cost USD : ${cost:.4f}  (Haiku 4.5: ${HAIKU_INPUT_PER_M}/M in, ${HAIKU_OUTPUT_PER_M}/M out)")
+    if not USE_STUB:
+        cost = (
+            USAGE["input_tokens"] * HAIKU_INPUT_PER_M / 1_000_000
+            + USAGE["output_tokens"] * HAIKU_OUTPUT_PER_M / 1_000_000
+        )
+        print()
+        print("=== Cost ===")
+        print(f"  model         : {ar.DEFAULT_MODEL}")
+        print(f"  api calls     : {USAGE['calls']}")
+        print(f"  input tokens  : {USAGE['input_tokens']:,}")
+        print(f"  output tokens : {USAGE['output_tokens']:,}")
+        print(f"  est. cost USD : ${cost:.4f}  (Haiku 4.5: ${HAIKU_INPUT_PER_M}/M in, ${HAIKU_OUTPUT_PER_M}/M out)")
     return 0
 
 
