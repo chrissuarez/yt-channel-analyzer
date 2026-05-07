@@ -2,7 +2,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+_LEGACY_WARNING = (
+    "[legacy] This command operates on Phase C / comparison-group code now "
+    "in legacy/. Functional but no longer the primary workflow."
+)
+
+
+def _warn_legacy() -> None:
+    print(_LEGACY_WARNING, file=sys.stderr)
 
 from yt_channel_analyzer.db import (
     add_video_to_comparison_group,
@@ -1048,6 +1058,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "create-comparison-group":
+        _warn_legacy()
         group_id = create_comparison_group(
             Path(args.db_path),
             subtopic_name=args.subtopic,
@@ -1059,6 +1070,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "list-comparison-groups":
+        _warn_legacy()
         for row in list_comparison_groups(Path(args.db_path), subtopic_name=args.subtopic):
             print(
                 " | ".join(
@@ -1075,6 +1087,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "rename-comparison-group":
+        _warn_legacy()
         group_id = rename_comparison_group(
             Path(args.db_path),
             subtopic_name=args.subtopic,
@@ -1085,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "add-video-to-comparison-group":
+        _warn_legacy()
         add_video_to_comparison_group(
             Path(args.db_path),
             video_id=args.video_id,
@@ -1094,6 +1108,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "remove-video-from-comparison-group":
+        _warn_legacy()
         remove_video_from_comparison_group(
             Path(args.db_path),
             video_id=args.video_id,
@@ -1103,6 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "move-video-between-comparison-groups":
+        _warn_legacy()
         move_video_between_comparison_groups(
             Path(args.db_path),
             video_id=args.video_id,
@@ -1133,6 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "show-comparison-group":
+        _warn_legacy()
         rows = get_comparison_group_details(Path(args.db_path), group_name=args.group)
         header = rows[0]
         print(
@@ -1154,6 +1171,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "fetch-group-transcripts":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1173,6 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "show-group-transcripts":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1191,6 +1210,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "process-group-videos":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1224,6 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "show-group-processing":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1243,6 +1264,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "analyze-comparison-group":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1270,6 +1292,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "show-group-analysis":
+        _warn_legacy()
         group = resolve_comparison_group(
             Path(args.db_path),
             group_name=getattr(args, "group", None),
@@ -1307,6 +1330,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "export-group-markdown":
+        _warn_legacy()
         db_path = Path(args.db_path)
         group = resolve_comparison_group(
             db_path,
@@ -1421,6 +1445,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "suggest-comparison-groups":
+        _warn_legacy()
         db_path = Path(args.db_path)
         primary_channel = get_primary_channel(db_path)
         approved_groups = [
@@ -1502,6 +1527,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "list-comparison-group-suggestions":
+        _warn_legacy()
         resolved_run_id = args.run_id or get_latest_topic_suggestion_run_id(Path(args.db_path))
         rows = list_video_comparison_group_suggestions(
             Path(args.db_path),
@@ -1570,6 +1596,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "summarize-comparison-group-suggestion-labels":
+        _warn_legacy()
         resolved_run_id = args.run_id or get_latest_topic_suggestion_run_id(Path(args.db_path))
         rows = summarize_comparison_group_suggestion_labels(
             Path(args.db_path),
@@ -1724,6 +1751,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "review-comparison-group-suggestions":
+        _warn_legacy()
         resolved_run_id = args.run_id or get_latest_topic_suggestion_run_id(Path(args.db_path))
         if resolved_run_id is None:
             print("(no topic suggestion runs)")
@@ -1816,6 +1844,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "approve-comparison-group-suggestion-label":
+        _warn_legacy()
         group_id = approve_comparison_group_suggestion_label(
             Path(args.db_path),
             subtopic_name=args.subtopic,
@@ -1844,6 +1873,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "reject-comparison-group-suggestion-label":
+        _warn_legacy()
         updated = reject_comparison_group_suggestion_label(
             Path(args.db_path),
             subtopic_name=args.subtopic,
@@ -1875,6 +1905,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "rename-comparison-group-suggestion-label":
+        _warn_legacy()
         label_id = rename_comparison_group_suggestion_label(
             Path(args.db_path),
             subtopic_name=args.subtopic,
