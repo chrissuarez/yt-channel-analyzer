@@ -844,6 +844,56 @@ class DiscoverCLITests(unittest.TestCase):
                 for row in assignments:
                     self.assertEqual(row["assignment_source"], "auto")
 
+    def test_discover_stub_persists_multi_topic_video_under_two_topics(
+        self,
+    ) -> None:
+        from yt_channel_analyzer.discovery import (
+            STUB_SECONDARY_TOPIC_NAME,
+            STUB_TOPIC_NAME,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            exit_code = cli.main(
+                [
+                    "discover",
+                    "--db-path",
+                    str(db_path),
+                    "--project-name",
+                    "proj",
+                    "--stub",
+                ]
+            )
+            self.assertEqual(exit_code, 0)
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id, t.name AS topic_name
+                    FROM video_topics vt
+                    JOIN videos v ON v.id = vt.video_id
+                    JOIN topics t ON t.id = vt.topic_id
+                    """
+                ).fetchall()
+
+                topics_by_video: dict[str, set[str]] = {}
+                for row in rows:
+                    topics_by_video.setdefault(
+                        row["youtube_video_id"], set()
+                    ).add(row["topic_name"])
+
+                # vid1 is the multi-topic stub video — must persist as two
+                # distinct video_topics rows so it appears under both topics
+                # in the GUI. vid2 stays single-topic.
+                self.assertEqual(
+                    topics_by_video["vid1"],
+                    {STUB_TOPIC_NAME, STUB_SECONDARY_TOPIC_NAME},
+                )
+                self.assertEqual(topics_by_video["vid2"], {STUB_TOPIC_NAME})
+
     def test_discover_requires_stub_flag(self) -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.sqlite3"

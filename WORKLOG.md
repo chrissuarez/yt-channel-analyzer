@@ -27,6 +27,29 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 05 / Ralph iteration 3: stub round-trip multi-topic test; close-out
+
+### Done
+- `test_discovery.py::DiscoverCLITests::test_discover_stub_persists_multi_topic_video_under_two_topics`:
+  exercises the `discover --stub` end-to-end and groups `video_topics`
+  rows by `youtube_video_id`, asserting `vid1` carries both
+  `STUB_TOPIC_NAME` and `STUB_SECONDARY_TOPIC_NAME` rows while `vid2`
+  stays single-topic. Closes overlay box 3's "round-trip test: stub
+  run persists ≥2 video_topics rows for the multi-topic stub video".
+  HTML/payload also-in coverage already shipped iter 2 (lines 1109,
+  1182, 1273); existing-fixture sweep done iter 1.
+
+### Verified
+- `.ralph/verify.sh`: 170 tests, ~40s, OK (was 169; +1).
+
+### Issue 05 status: COMPLETE
+- Both §A2/§A3 ROADMAP boxes ticked iters 1-2; overlay box 3
+  loose-end tests now satisfied. All 5 issue acceptance criteria
+  met (prompt v4 + stub fixture, schema permits N rows per video,
+  GUI shows under each topic, also-in pill, smoke fixture).
+
+---
+
 ## 2026-05-07 — Issue 04 / Ralph iteration 3: validator bounds + slice 04 test coverage; close-out
 
 ### Done
