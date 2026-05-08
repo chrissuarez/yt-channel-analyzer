@@ -5105,5 +5105,119 @@ class RunHistoryAdvancedHTMLTests(unittest.TestCase):
         self.assertIn("run-history-advanced", UI_REVISION)
 
 
+class LatestSubtopicRunIdByTopicTests(unittest.TestCase):
+    def _seed_two_runs(self, db_path: Path) -> tuple[int, int]:
+        """Seed Health + Business topics; run #1 has subtopic for Health, run #2 for Business."""
+        from yt_channel_analyzer.db import create_topic_suggestion_run
+
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1", topic_name="Health",
+                        confidence=0.9, reason="r1",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2", topic_name="Business",
+                        confidence=0.8, reason="r2",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+        run_a = create_topic_suggestion_run(db_path, model_name="stub-run-a")
+        run_b = create_topic_suggestion_run(db_path, model_name="stub-run-b")
+        with connect(db_path) as conn:
+            project_id = conn.execute("SELECT id FROM projects").fetchone()[0]
+            topic_ids = {
+                row[0]: row[1]
+                for row in conn.execute("SELECT name, id FROM topics").fetchall()
+            }
+            conn.execute(
+                "INSERT INTO subtopic_suggestion_labels"
+                "(project_id, topic_id, suggestion_run_id, name) VALUES (?, ?, ?, ?)",
+                (project_id, topic_ids["Health"], run_a, "Sleep"),
+            )
+            conn.execute(
+                "INSERT INTO subtopic_suggestion_labels"
+                "(project_id, topic_id, suggestion_run_id, name) VALUES (?, ?, ?, ?)",
+                (project_id, topic_ids["Business"], run_b, "Founders"),
+            )
+            conn.commit()
+        return run_a, run_b
+
+    def test_helper_returns_max_run_id_for_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import _latest_subtopic_run_id_for_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            run_a, run_b = self._seed_two_runs(db_path)
+            self.assertEqual(_latest_subtopic_run_id_for_topic(db_path, "Health"), run_a)
+            self.assertEqual(_latest_subtopic_run_id_for_topic(db_path, "Business"), run_b)
+
+    def test_helper_returns_none_when_topic_has_no_subtopic_run(self) -> None:
+        from yt_channel_analyzer.review_ui import _latest_subtopic_run_id_for_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1", topic_name="Health",
+                            confidence=0.9, reason="r",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            self.assertIsNone(_latest_subtopic_run_id_for_topic(db_path, "Health"))
+            self.assertIsNone(_latest_subtopic_run_id_for_topic(db_path, "Nonexistent"))
+
+    def test_state_payload_carries_latest_subtopic_run_id_by_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            run_a, run_b = self._seed_two_runs(db_path)
+            payload = build_state_payload(db_path)
+            self.assertIn("latest_subtopic_run_id_by_topic", payload)
+            mapping = payload["latest_subtopic_run_id_by_topic"]
+            self.assertEqual(mapping.get("Health"), run_a)
+            self.assertEqual(mapping.get("Business"), run_b)
+
+    def test_state_payload_empty_dict_when_no_subtopic_runs(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            payload = build_state_payload(db_path)
+            self.assertEqual(payload["latest_subtopic_run_id_by_topic"], {})
+
+    def test_html_topic_select_handler_reads_latest_subtopic_run_id_by_topic(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("latest_subtopic_run_id_by_topic", html)
+        topic_handler_idx = html.find("topic-select')")
+        self.assertGreaterEqual(topic_handler_idx, 0)
+        change_idx = html.find("addEventListener('change'", topic_handler_idx)
+        self.assertGreater(change_idx, topic_handler_idx)
+        handler_block = html[change_idx:change_idx + 800]
+        self.assertIn("latest_subtopic_run_id_by_topic", handler_block)
+        self.assertIn("run-select", handler_block)
+
+
 if __name__ == "__main__":
     unittest.main()

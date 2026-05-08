@@ -1948,7 +1948,18 @@ HTML_PAGE = """<!doctype html>
 
     document.getElementById('refresh-btn').addEventListener('click', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('run-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
-    document.getElementById('topic-select').addEventListener('change', () => fetchState({ topic: selectedTopicName(), subtopic: null }).catch((error) => setStatus(error.message, true)));
+    document.getElementById('topic-select').addEventListener('change', () => {
+      const newTopic = selectedTopicName();
+      const map = state.payload?.latest_subtopic_run_id_by_topic || {};
+      if (newTopic && Object.prototype.hasOwnProperty.call(map, newTopic)) {
+        const targetRunId = String(map[newTopic]);
+        const runSelect = document.getElementById('run-select');
+        if (runSelect && String(runSelect.value) !== targetRunId) {
+          runSelect.value = targetRunId;
+        }
+      }
+      fetchState({ topic: newTopic, subtopic: null }).catch((error) => setStatus(error.message, true));
+    });
     document.getElementById('subtopic-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('generate-topics-btn').addEventListener('click', () => generateTopics());
     document.getElementById('generate-subtopics-btn').addEventListener('click', () => generateSubtopics());
@@ -2146,6 +2157,42 @@ def _enrich_runs_with_subtopic_counts(db_path: Path, runs: list[dict[str, Any]])
         )
         enriched.append(run)
     return enriched
+
+
+def _latest_subtopic_run_id_for_topic(
+    db_path: str | Path, topic_name: str
+) -> int | None:
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            """
+            SELECT MAX(subtopic_suggestion_labels.suggestion_run_id) AS run_id
+              FROM subtopic_suggestion_labels
+              JOIN topics ON topics.id = subtopic_suggestion_labels.topic_id
+             WHERE topics.name = ?
+            """,
+            (topic_name,),
+        ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return int(row[0])
+
+
+def _latest_subtopic_run_ids_by_topic(db_path: str | Path) -> dict[str, int]:
+    with sqlite3.connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT topics.name AS topic_name,
+                   MAX(subtopic_suggestion_labels.suggestion_run_id) AS run_id
+              FROM subtopic_suggestion_labels
+              JOIN topics ON topics.id = subtopic_suggestion_labels.topic_id
+          GROUP BY topics.name
+            """
+        ).fetchall()
+    return {
+        str(row[0]): int(row[1])
+        for row in rows
+        if row[0] is not None and row[1] is not None
+    }
 
 
 def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str, Any] | None:
@@ -2700,6 +2747,7 @@ def build_state_payload(
     )
     topic_inventory = _build_topic_inventory(db_path, topic_name=selected_topic)
     discovery_topic_map = _build_discovery_topic_map(db_path)
+    latest_subtopic_run_id_by_topic = _latest_subtopic_run_ids_by_topic(db_path)
     if primary_channel is None:
         channel_overview = None
     else:
@@ -2723,6 +2771,7 @@ def build_state_payload(
         "topic_inventory": topic_inventory,
         "discovery_topic_map": discovery_topic_map,
         "channel_overview": channel_overview,
+        "latest_subtopic_run_id_by_topic": latest_subtopic_run_id_by_topic,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),
             "summary": topic_summary,

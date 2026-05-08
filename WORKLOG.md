@@ -1676,3 +1676,14 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - 5 new tests in `RunHistoryAdvancedHTMLTests`: (1) `<details class="run-history-advanced">` wraps `id="run-select"` + summary copy ships, (2) primary `.controls.row` no longer contains `id="run-select"`, (3) `id="topic-select"` + `id="subtopic-select"` remain inside primary `.controls.row`, (4) hint copy renders, (5) `UI_REVISION` carries all three required substrings.
 - Verify gate: 195 tests green (~47s; +5 vs prior iter).
 - Next iteration (slice 12 box 2): `_latest_subtopic_run_id_for_topic` helper + `latest_subtopic_run_id_by_topic` payload + JS topic-select handler tweak so changing the parent topic snaps `run-select` to the latest run that has subtopic labels for that topic.
+
+## 2026-05-08 — Slice 12 run-ID demote: per-topic latest-subtopic-run snap (Ralph iter 2)
+
+- New `_latest_subtopic_run_id_for_topic(db_path, topic_name) -> int | None` helper in `review_ui.py`: `SELECT MAX(suggestion_run_id) FROM subtopic_suggestion_labels JOIN topics ON topics.id = subtopic_suggestion_labels.topic_id WHERE topics.name = ?`. Returns `None` when topic has no subtopic-suggestion labels (incl. unknown topic name).
+- Added bulk-query sibling `_latest_subtopic_run_ids_by_topic(db_path)` (single `GROUP BY topics.name`) used by `build_state_payload` so payload assembly stays O(1) DB hits regardless of topic count. Standalone helper kept as the spec-mandated lookup surface.
+- `build_state_payload` now exposes `latest_subtopic_run_id_by_topic: dict[str, int]` (top-level payload key, alongside `discovery_topic_map` / `channel_overview`). Empty dict on fresh DBs.
+- JS topic-select `change` listener: reads `state.payload?.latest_subtopic_run_id_by_topic?.[newTopic]`; when present and different from current `run-select.value`, sets `run-select.value` *before* the existing `fetchState({ topic, subtopic: null })` so `selectedRunId()` inside `fetchState` picks up the new id. Pre-existing change behavior preserved (still passes `subtopic: null` to clear comparison-group selection).
+- 5 new tests in `LatestSubtopicRunIdByTopicTests`: per-topic max run id (2 runs split across Health/Business → A=run_a, B=run_b); helper returns `None` when topic has no subtopic labels (and for unknown topic name); payload carries the mapping dict; payload dict is `{}` on a fresh DB with no subtopic-suggestion runs; HTML wiring — JS topic-select change handler block references both `latest_subtopic_run_id_by_topic` and `run-select`.
+- Verify gate: 200 tests green (~48s; +5 vs prior iter).
+- Issue 12 acceptance criteria 1–8 all met. Branch ready for review.
+- Note: prompt referenced `.scratch/phase-a-topic-map/issues/12-*.md` but the issue spec actually lives at `.ralph/issues/12-run-id-demote.md` — flagged in iteration summary. (Pattern matches issue 11; issue files for slices that ship as Ralph overlays live under `.ralph/issues/` not `.scratch/...`.)
