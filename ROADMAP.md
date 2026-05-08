@@ -104,6 +104,7 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Document the Phase A end-to-end operator workflow
 - [x] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
 - [x] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel — 2.17 avg; also subsumes issue 04 criterion 5: validate model-emitted confidence + reason quality on a real channel — spread 0.85–0.95, reasons grounded in titles; evidence: `.scratch/issue-10/doac-smoke-20260507-221241.log`)*
+  - [x] CLI `--real` flag wired into `discover` and `analyze` (issue 02b, branch `feat/issue-02b-cli-real-flag`). `--stub` and `--real` are now a required mutex on both commands; `--real` requires `RALPH_ALLOW_REAL_LLM=1` + `ANTHROPIC_API_KEY` (without the env var, the run fails fast with `RuntimeError` before any API call). New `--model` arg overrides the Anthropic model id (defaults to extractor's `DEFAULT_MODEL` / Haiku 4.5). `_resolve_discovery_llm` helper picks `(llm, model, prompt_version)` and keeps the sqlite connection alive inside the `make_real_llm_callable` closure for the duration of the run. Real-mode recipe added to `docs/operator-workflow.md` step 3 and `YT_ANALYZER_CHEATSHEET.md` §1. Six new tests cover the mutex + missing-env-var + rename of the legacy "requires stub" tests.
 
 #### A6. GUI plan finish — Channel Overview
 

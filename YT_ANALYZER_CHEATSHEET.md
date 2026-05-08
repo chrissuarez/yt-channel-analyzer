@@ -35,9 +35,25 @@ PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
   --stub
 ```
 
-`--stub` is currently required. Real-LLM mode runs via
-`.scratch/issue-02/smoke.py` (sets `RALPH_ALLOW_REAL_LLM=1` internally,
-instruments token cost). A `--real` CLI flag is an open follow-up.
+`--stub` and `--real` are a required mutex on `discover` and `analyze` —
+pass exactly one. Stub is free + deterministic (no API call); use it
+for wiring sanity checks.
+
+### Run discovery (real LLM, ~$0.019 per 15 episodes)
+
+```bash
+RALPH_ALLOW_REAL_LLM=1 \
+  PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  --real
+```
+
+`RALPH_ALLOW_REAL_LLM=1` and `ANTHROPIC_API_KEY` are both required for
+`--real`. Override the model with `--model claude-sonnet-4-6` (or any
+Anthropic model id); default is Haiku 4.5. For an instrumented
+real-LLM smoke with token-cost reporting, see
+`.scratch/issue-02/smoke.py`.
 
 ### Serve the review UI
 

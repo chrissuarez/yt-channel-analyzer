@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from yt_channel_analyzer.db import (
     connect,
@@ -894,7 +896,7 @@ class DiscoverCLITests(unittest.TestCase):
                 )
                 self.assertEqual(topics_by_video["vid2"], {STUB_TOPIC_NAME})
 
-    def test_discover_requires_stub_flag(self) -> None:
+    def test_discover_requires_mode_flag(self) -> None:
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.sqlite3"
             _seed_channel_with_videos(db_path)
@@ -908,6 +910,41 @@ class DiscoverCLITests(unittest.TestCase):
                         "proj",
                     ]
                 )
+
+    def test_discover_stub_and_real_are_mutually_exclusive(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "discover",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "proj",
+                        "--stub",
+                        "--real",
+                    ]
+                )
+
+    def test_discover_real_without_env_var_raises(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                with self.assertRaisesRegex(RuntimeError, "RALPH_ALLOW_REAL_LLM"):
+                    cli.main(
+                        [
+                            "discover",
+                            "--db-path",
+                            str(db_path),
+                            "--project-name",
+                            "proj",
+                            "--real",
+                        ]
+                    )
 
 
 class AnalyzeCLITests(unittest.TestCase):
@@ -1014,7 +1051,7 @@ class AnalyzeCLITests(unittest.TestCase):
                 for row in assignments:
                     self.assertEqual(row["assignment_source"], "auto")
 
-    def test_analyze_requires_stub_flag(self) -> None:
+    def test_analyze_requires_mode_flag(self) -> None:
         self._patch_youtube()
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.sqlite3"
@@ -1030,6 +1067,45 @@ class AnalyzeCLITests(unittest.TestCase):
                         "@doac",
                     ]
                 )
+
+    def test_analyze_stub_and_real_are_mutually_exclusive(self) -> None:
+        self._patch_youtube()
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            with self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "analyze",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "doac",
+                        "--channel-input",
+                        "@doac",
+                        "--stub",
+                        "--real",
+                    ]
+                )
+
+    def test_analyze_real_without_env_var_raises(self) -> None:
+        self._patch_youtube()
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+                with self.assertRaisesRegex(RuntimeError, "RALPH_ALLOW_REAL_LLM"):
+                    cli.main(
+                        [
+                            "analyze",
+                            "--db-path",
+                            str(db_path),
+                            "--project-name",
+                            "doac",
+                            "--channel-input",
+                            "@doac",
+                            "--real",
+                        ]
+                    )
 
 
 class DiscoveryStatePayloadTests(unittest.TestCase):

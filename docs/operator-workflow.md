@@ -18,7 +18,7 @@ set -a; source .env; set +a   # exposes ANTHROPIC_API_KEY, YOUTUBE_API_KEY
 
 The Phase A pipeline calls Anthropic (Haiku 4.5 by default) and the
 YouTube Data API. Real-LLM mode is gated by `RALPH_ALLOW_REAL_LLM=1`
-on top of `--stub`'s absence — see step 3.
+on top of passing `--real` (instead of `--stub`) — see step 3.
 
 ---
 
@@ -83,19 +83,30 @@ PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
   --stub
 ```
 
-### Real-LLM mode (paid, ~$0.01 per 15 episodes on Haiku 4.5)
+### Real-LLM mode (paid, ~$0.019 per 15 episodes on Haiku 4.5)
 
-There is no `--real` CLI flag yet (open follow-up). The supported
-real-LLM entry point is `.scratch/issue-02/smoke.py`, which sets
-`RALPH_ALLOW_REAL_LLM=1` internally and instruments token cost:
+```bash
+RALPH_ALLOW_REAL_LLM=1 \
+  PYTHONPATH=. python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/doac.sqlite \
+  --project-name "doac" \
+  --real
+```
+
+`--stub` and `--real` are a required mutex — pass exactly one. The
+`RALPH_ALLOW_REAL_LLM=1` env var plus `ANTHROPIC_API_KEY` are both
+required for `--real`; without the env var, the run fails fast with a
+`RuntimeError` before any API call. Override the model with
+`--model claude-sonnet-4-6` (or any other Anthropic model id);
+default is `extractor.anthropic_runner.DEFAULT_MODEL` (Haiku 4.5).
+
+For an instrumented real-LLM smoke (token-cost report, written to
+`/tmp/doac-smoke-<ts>.db`), the script at `.scratch/issue-02/smoke.py`
+remains the canonical reference:
 
 ```bash
 PYTHONPATH=. python3 yt_channel_analyzer/.scratch/issue-02/smoke.py
 ```
-
-Read the file before running — it currently hardcodes
-`CHANNEL_INPUT="@TheDiaryOfACEO"` and writes to `/tmp/doac-smoke-<ts>.db`.
-Adapt or copy for other channels.
 
 ---
 

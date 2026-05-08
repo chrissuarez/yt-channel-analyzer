@@ -18,6 +18,7 @@ from yt_channel_analyzer.db import (
     add_video_to_comparison_group,
     assign_subtopic_to_video,
     assign_topic_to_video,
+    connect,
     move_video_between_comparison_groups,
     create_comparison_group,
     create_subtopic,
@@ -90,8 +91,10 @@ from yt_channel_analyzer.db import (
     supersede_stale_topic_suggestions,
 )
 from yt_channel_analyzer.discovery import (
+    DISCOVERY_PROMPT_VERSION,
     STUB_MODEL,
     STUB_PROMPT_VERSION,
+    make_real_llm_callable,
     run_discovery,
     stub_llm,
 )
@@ -112,6 +115,23 @@ from yt_channel_analyzer.youtube import (
 
 
 CLI_MODULE_PREFIX = "python3 -m yt_channel_analyzer.cli"
+
+
+def _resolve_discovery_llm(db_path: Path, args: argparse.Namespace):
+    """Pick stub vs real LLM for discover/analyze.
+
+    Returns (llm_callable, model_name, prompt_version). For --real, the
+    Anthropic-backed callable closes over an open sqlite connection (kept
+    alive by the closure for the duration of the discovery run); the
+    RALPH_ALLOW_REAL_LLM=1 gate is enforced inside make_real_llm_callable.
+    """
+    if args.real:
+        from yt_channel_analyzer.extractor.anthropic_runner import DEFAULT_MODEL
+
+        connection = connect(db_path)
+        llm = make_real_llm_callable(connection, model=args.model)
+        return llm, args.model or DEFAULT_MODEL, DISCOVERY_PROMPT_VERSION
+    return stub_llm, STUB_MODEL, STUB_PROMPT_VERSION
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -798,10 +818,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     discover_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
     discover_parser.add_argument("--project-name", required=True, help="Project whose primary channel to analyze.")
-    discover_parser.add_argument(
+    discover_mode = discover_parser.add_mutually_exclusive_group(required=True)
+    discover_mode.add_argument(
         "--stub",
         action="store_true",
-        help="Use a hardcoded fake LLM payload (no API call). Required until real LLM lands.",
+        help="Use a hardcoded fake LLM payload (no API call). Free and deterministic; recommended for wiring sanity checks.",
+    )
+    discover_mode.add_argument(
+        "--real",
+        action="store_true",
+        help="Use the real Anthropic LLM. Requires RALPH_ALLOW_REAL_LLM=1 and ANTHROPIC_API_KEY. Costs ~$0.019 per ~15-episode run.",
+    )
+    discover_parser.add_argument(
+        "--model",
+        help="Override the Anthropic model id (defaults to extractor's DEFAULT_MODEL). Only used with --real.",
     )
 
     analyze_parser = subparsers.add_parser(
@@ -821,10 +851,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=25,
         help="Conservative maximum number of uploaded videos to fetch.",
     )
-    analyze_parser.add_argument(
+    analyze_mode = analyze_parser.add_mutually_exclusive_group(required=True)
+    analyze_mode.add_argument(
         "--stub",
         action="store_true",
-        help="Use a hardcoded fake LLM payload (no API call). Required until real LLM lands.",
+        help="Use a hardcoded fake LLM payload (no API call). Free and deterministic; recommended for wiring sanity checks.",
+    )
+    analyze_mode.add_argument(
+        "--real",
+        action="store_true",
+        help="Use the real Anthropic LLM. Requires RALPH_ALLOW_REAL_LLM=1 and ANTHROPIC_API_KEY. Costs ~$0.019 per ~15-episode run.",
+    )
+    analyze_parser.add_argument(
+        "--model",
+        help="Override the Anthropic model id (defaults to extractor's DEFAULT_MODEL). Only used with --real.",
     )
 
     serve_review_ui_parser = subparsers.add_parser(
@@ -1949,21 +1989,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "discover":
-        if not args.stub:
-            parser.error("discover currently requires --stub (real LLM lands in slice 02)")
+        db_path = Path(args.db_path)
+        llm, model, prompt_version = _resolve_discovery_llm(db_path, args)
         run_id = run_discovery(
-            Path(args.db_path),
+            db_path,
             project_name=args.project_name,
-            llm=stub_llm,
-            model=STUB_MODEL,
-            prompt_version=STUB_PROMPT_VERSION,
+            llm=llm,
+            model=model,
+            prompt_version=prompt_version,
         )
-        print(f"Discovery run {run_id} complete (model={STUB_MODEL})")
+        print(f"Discovery run {run_id} complete (model={model})")
         return 0
 
     if args.command == "analyze":
-        if not args.stub:
-            parser.error("analyze currently requires --stub (real LLM lands in slice 02)")
         db_path = Path(args.db_path)
         canonical_channel_id = resolve_canonical_channel_id(args.channel_input)
         metadata = fetch_channel_metadata(canonical_channel_id)
@@ -1974,16 +2012,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         videos = fetch_channel_videos(metadata.youtube_channel_id, limit=args.limit)
         upsert_videos_for_primary_channel(db_path, videos=videos)
+        llm, model, prompt_version = _resolve_discovery_llm(db_path, args)
         run_id = run_discovery(
             db_path,
             project_name=args.project_name,
-            llm=stub_llm,
-            model=STUB_MODEL,
-            prompt_version=STUB_PROMPT_VERSION,
+            llm=llm,
+            model=model,
+            prompt_version=prompt_version,
         )
         print(
             f"Analyzed {metadata.youtube_channel_id} ({metadata.title}): "
-            f"{len(videos)} videos, discovery run {run_id}"
+            f"{len(videos)} videos, discovery run {run_id} (model={model})"
         )
         return 0
 
