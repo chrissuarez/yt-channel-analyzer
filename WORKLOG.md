@@ -27,6 +27,42 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 13 / Ralph iteration 3: comparison readiness polish + COMPLETE
+
+### Done
+- JS `topicInventoryHtml` per-bucket iteration now spreads
+  `bucket = { ...bucket, transcript_count: bucket.transcript_count ?? 0,
+  video_count: bucket.video_count ?? 0 }` before the template, so
+  stale callers missing either coverage key still render
+  `0/0 transcripts` instead of `undefined/undefined`. Template
+  literal `${bucket.transcript_count}/${bucket.video_count}`
+  preserved verbatim — AC7's `assertIn` test stays green.
+- New `test_empty_subtopic_bucket_has_zero_counts_and_too_few_state`
+  in `TopicInventoryReadinessStateTests`: subtopic with no
+  `video_subtopics` rows yields `video_count=0`,
+  `transcript_count=0`, `processed_count=0`,
+  `readiness_state="too_few"`, `comparison_ready=False`.
+- Re-grep of `comparison_ready` confirms only call sites are the
+  3 back-compat read assertions in `test_discovery.py` and the
+  write site in `_build_topic_inventory` — no other JS/Python
+  consumers, alias intact.
+- LEFT JOIN cardinality dedupe still covered by
+  `test_transcript_and_processed_counts_dedupe_per_video` (5×5×5,
+  no Cartesian inflation).
+
+### Verified
+- `.ralph/verify.sh`: 210 tests, ~50s, OK (was 209; +1).
+
+### Issue 13 acceptance status — all green
+- AC1–AC10 ✓ (see iter 1 + iter 2 entries below for breakdowns).
+- Polish loose-ends (this iter): empty-bucket + stale-caller +
+  dedupe re-checked.
+
+### Next
+- Issue 13 COMPLETE — branch ready for review and merge.
+
+---
+
 ## 2026-05-08 — Issue 13 / Ralph iteration 2: comparison readiness HTML + UI rev
 
 ### Done

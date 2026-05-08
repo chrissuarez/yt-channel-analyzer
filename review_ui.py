@@ -1464,6 +1464,7 @@ HTML_PAGE = """<!doctype html>
       const unassigned = inventory.unassigned_videos || [];
       const assignedHtml = buckets.length
         ? buckets.map((bucket) => {
+            bucket = { ...bucket, transcript_count: bucket.transcript_count ?? 0, video_count: bucket.video_count ?? 0 };
             const candidates = allSubtopicNames.filter((n) => n !== bucket.name);
             const chips = bucket.videos.length
               ? bucket.videos.map((v) => subtopicVideoChipHtml(v, topicName, bucket.name, candidates)).join('')

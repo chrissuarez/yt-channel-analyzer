@@ -5383,6 +5383,29 @@ class TopicInventoryReadinessStateTests(unittest.TestCase):
             self.assertEqual(bucket["processed_count"], 5)
             self.assertEqual(bucket["readiness_state"], "ready")
 
+    def test_empty_subtopic_bucket_has_zero_counts_and_too_few_state(self) -> None:
+        """A subtopic with no videos yields zero counts and `too_few` state —
+        the JS sub-line renders `0/0 transcripts` without crashing."""
+        from yt_channel_analyzer.review_ui import _build_topic_inventory
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_subtopic_with_videos(
+                db_path,
+                video_count=0,
+                transcripts_available=0,
+                processed_ok=0,
+            )
+            inventory = _build_topic_inventory(db_path, topic_name="Health")
+            self.assertIsNotNone(inventory)
+            self.assertEqual(len(inventory["subtopics"]), 1)
+            bucket = inventory["subtopics"][0]
+            self.assertEqual(bucket["video_count"], 0)
+            self.assertEqual(bucket["transcript_count"], 0)
+            self.assertEqual(bucket["processed_count"], 0)
+            self.assertEqual(bucket["readiness_state"], "too_few")
+            self.assertFalse(bucket["comparison_ready"])
+
 
 class ComparisonReadinessHTMLTests(unittest.TestCase):
     def test_html_page_carries_all_three_readiness_class_strings(self) -> None:
