@@ -377,6 +377,18 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS topic_renames (
+        id INTEGER PRIMARY KEY,
+        project_id INTEGER NOT NULL,
+        topic_id INTEGER NOT NULL,
+        old_name TEXT NOT NULL,
+        new_name TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -550,6 +562,14 @@ REQUIRED_TABLE_COLUMNS = {
         "relative_path": "TEXT NOT NULL",
         "source_updated_at": "TEXT",
         "exported_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+        "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "topic_renames": {
+        "id": "INTEGER PRIMARY KEY",
+        "project_id": "INTEGER NOT NULL",
+        "topic_id": "INTEGER NOT NULL",
+        "old_name": "TEXT NOT NULL",
+        "new_name": "TEXT NOT NULL",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
 }
@@ -1722,7 +1742,7 @@ def rename_topic(
         cursor = connection.cursor()
         topic_row = cursor.execute(
             """
-            SELECT topics.id
+            SELECT topics.id, topics.project_id
             FROM topics
             JOIN projects ON projects.id = topics.project_id
             WHERE projects.name = ? AND topics.name = ?
@@ -1733,15 +1753,23 @@ def rename_topic(
         ).fetchone()
         if topic_row is None:
             raise ValueError(f"topic not found: {current_name}")
+        topic_id, project_id = topic_row[0], topic_row[1]
         try:
             cursor.execute(
                 "UPDATE topics SET name = ? WHERE id = ?",
-                (new_name, topic_row[0]),
+                (new_name, topic_id),
             )
         except sqlite3.IntegrityError as exc:
             raise ValueError(f"topic already exists: {new_name}") from exc
+        cursor.execute(
+            """
+            INSERT INTO topic_renames(project_id, topic_id, old_name, new_name)
+            VALUES (?, ?, ?, ?)
+            """,
+            (project_id, topic_id, current_name, new_name),
+        )
         connection.commit()
-    return topic_row[0]
+    return topic_id
 
 
 def merge_topics(

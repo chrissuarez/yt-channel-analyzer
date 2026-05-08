@@ -454,6 +454,116 @@ def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
     )
 
 
+def _apply_renames_to_payload(
+    connection: sqlite3.Connection,
+    project_id: int,
+    payload: DiscoveryPayload,
+) -> DiscoveryPayload:
+    """Rewrite topic names in ``payload`` through the project's rename log.
+
+    Reads `topic_renames` rows for ``project_id`` (oldest first), builds a
+    fixed-point map collapsing multi-hop chains (A→B then B→C resolves
+    incoming "A" straight to "C"), then returns a new ``DiscoveryPayload``
+    with rewritten ``topics`` (deduped after rewrite, preserving first-seen
+    order), ``subtopics[i].parent_topic``, and ``assignments[i].topic_name``.
+    Pure function: never mutates the database.
+    """
+    rows = connection.execute(
+        """
+        SELECT old_name, new_name
+        FROM topic_renames
+        WHERE project_id = ?
+        ORDER BY id
+        """,
+        (project_id,),
+    ).fetchall()
+    direct: dict[str, str] = {}
+    for row in rows:
+        old_name = row["old_name"] if isinstance(row, sqlite3.Row) else row[0]
+        new_name = row["new_name"] if isinstance(row, sqlite3.Row) else row[1]
+        direct[old_name] = new_name
+
+    def resolve(name: str) -> str:
+        seen: set[str] = set()
+        current = name
+        while current in direct and current not in seen:
+            seen.add(current)
+            nxt = direct[current]
+            if nxt == current:
+                break
+            current = nxt
+        return current
+
+    new_topics: list[str] = []
+    seen_topics: set[str] = set()
+    for topic in payload.topics:
+        rewritten = resolve(topic)
+        if rewritten in seen_topics:
+            continue
+        seen_topics.add(rewritten)
+        new_topics.append(rewritten)
+
+    new_subtopics = [
+        DiscoverySubtopic(name=sub.name, parent_topic=resolve(sub.parent_topic))
+        for sub in payload.subtopics
+    ]
+    new_assignments = [
+        DiscoveryAssignment(
+            youtube_video_id=a.youtube_video_id,
+            topic_name=resolve(a.topic_name),
+            confidence=a.confidence,
+            reason=a.reason,
+            subtopic_name=a.subtopic_name,
+        )
+        for a in payload.assignments
+    ]
+    return DiscoveryPayload(
+        topics=new_topics,
+        assignments=new_assignments,
+        subtopics=new_subtopics,
+    )
+
+
+def _suppress_wrong_assignments_in_run(
+    connection: sqlite3.Connection,
+    channel_id: int,
+    run_id: int,
+) -> None:
+    """Delete any `video_topics` / `video_subtopics` rows the user previously
+    marked wrong, restricted to the current run's inserts.
+
+    `wrong_assignments.topic_id` is a stable id (topic rows survive renames),
+    so name-rewriting via the rename map is irrelevant here — the curated
+    topic id is what we suppress.
+    """
+    connection.execute(
+        """
+        DELETE FROM video_topics
+        WHERE discovery_run_id = ?
+          AND (video_id, topic_id) IN (
+              SELECT wa.video_id, wa.topic_id
+              FROM wrong_assignments wa
+              JOIN videos v ON v.id = wa.video_id
+              WHERE v.channel_id = ? AND wa.subtopic_id IS NULL
+          )
+        """,
+        (run_id, channel_id),
+    )
+    connection.execute(
+        """
+        DELETE FROM video_subtopics
+        WHERE discovery_run_id = ?
+          AND (video_id, subtopic_id) IN (
+              SELECT wa.video_id, wa.subtopic_id
+              FROM wrong_assignments wa
+              JOIN videos v ON v.id = wa.video_id
+              WHERE v.channel_id = ? AND wa.subtopic_id IS NOT NULL
+          )
+        """,
+        (run_id, channel_id),
+    )
+
+
 def run_discovery(
     db_path: str | Path,
     *,
@@ -523,6 +633,8 @@ def run_discovery(
             )
             connection.commit()
             raise
+
+        payload = _apply_renames_to_payload(connection, project_id, payload)
 
         cursor = connection.cursor()
         cursor.execute(
@@ -632,6 +744,8 @@ def run_discovery(
                         run_id,
                     ),
                 )
+
+        _suppress_wrong_assignments_in_run(connection, channel_id, run_id)
 
         connection.commit()
         return run_id

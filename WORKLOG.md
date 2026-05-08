@@ -1437,3 +1437,14 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - Tests: `test_state_payload_episode_dicts_carry_also_in_for_multi_topic` (vid1 in Health+Business; vid2 only in Business; assertions cover both directions of also_in + empty list invariant); `test_html_page_renders_also_in_pill_for_multi_topic_episodes` (CSS class + literal `also in:` string ship in the rendered HTML).
 - Verify gate: 169 tests green (~36s; +2 vs prior iter).
 - Issue 05 acceptance criteria 1, 2, 3, 4, 5 now all met (criterion 3 — same episode in both topic lists — is a virtue of multi-row `video_topics` + the iter 1 stub fixture; covered by the new also_in test which traverses both topic.episodes lists).
+
+## 2026-05-08 — Slice 08 rename event log + replay (Ralph iter 1)
+
+- New `topic_renames(id, project_id, topic_id, old_name, new_name, created_at)` table in `db.py` `TABLE_STATEMENTS` + `REQUIRED_TABLE_COLUMNS`. FKs cascade off `projects` and `topics`. `topic_id` is the row's id at rename time (kept for forensics; replay matches by name).
+- `db.rename_topic` instrumented: after the existing `UPDATE topics SET name`, inserts a `topic_renames` row in the same connection/transaction so a failed rename does not record a phantom event. (`/api/discovery/topic/rename` calls into `rename_topic`, so the API path is covered without touching `review_ui.py`.)
+- `discovery._apply_renames_to_payload(connection, project_id, payload)`: builds a fixed-point rename map (cycle-safe via `seen` set) collapsing A→B→C straight to "C". Returns a new `DiscoveryPayload` with rewritten `topics` (deduped, first-seen order), `subtopics[i].parent_topic`, `assignments[i].topic_name`. Pure — no DB mutation.
+- `discovery._suppress_wrong_assignments_in_run(connection, channel_id, run_id)`: runs after the final assignment loop in `run_discovery`. Two parallel DELETEs (topic-level and subtopic-level) scoped to the current `discovery_run_id` and the channel. `wrong_assignments.topic_id` is stable across renames, so no name-rewriting needed here.
+- `run_discovery` wires both: `_apply_renames_to_payload` immediately after `payload = llm(videos)` returns; `_suppress_wrong_assignments_in_run` after the assignment-insert loop, before commit. Errored-run path (LLM raises) is unaffected — neither helper runs.
+- 5 new tests in `StickyCurationRenameReplayTests`: rename-then-rerun keeps curated name with both episodes still attached and no orphan old-name row; mark-wrong-then-rerun has the suppressed `(vid, topic)` pair absent from the new run's `video_topics` (siblings preserved); multi-hop A→B then B→C collapses incoming "A" to "C"; dedupe after rewrite ([A, B] with A→B → [B]); rename API records exactly one `topic_renames` row with the right old/new pair.
+- Verify gate: 175 tests green (~44s; +5 vs prior iter).
+- Next iteration (slice 08 box 2): `_topics_introduced_in_run` helper + `new_topic_names` payload + JS "New" badge.

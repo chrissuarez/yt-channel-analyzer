@@ -4394,5 +4394,212 @@ class RunDiscoveryConfidencePersistenceTests(unittest.TestCase):
         self.assertEqual(sub_rows[0]["reason"], "title contains 'sleep'")
 
 
+class StickyCurationRenameReplayTests(unittest.TestCase):
+    def test_rename_then_rerun_keeps_curated_name_with_episodes(self) -> None:
+        from yt_channel_analyzer.db import rename_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            rename_topic(
+                db_path,
+                project_name="proj",
+                current_name="General",
+                new_name="WellbeingRenamed",
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                topic_rows = conn.execute(
+                    "SELECT id, name FROM topics WHERE name IN ('General', 'WellbeingRenamed')"
+                ).fetchall()
+                names = {row["name"] for row in topic_rows}
+                self.assertEqual(names, {"WellbeingRenamed"})
+                self.assertEqual(len(topic_rows), 1)
+
+                wellbeing_id = topic_rows[0]["id"]
+                episode_rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id
+                    FROM video_topics vt
+                    JOIN videos v ON v.id = vt.video_id
+                    WHERE vt.topic_id = ?
+                    """,
+                    (wellbeing_id,),
+                ).fetchall()
+                yt_ids = {row["youtube_video_id"] for row in episode_rows}
+                self.assertEqual(yt_ids, {"vid1", "vid2"})
+
+    def test_mark_wrong_then_rerun_suppresses_assignment(self) -> None:
+        from yt_channel_analyzer.db import mark_assignment_wrong
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            mark_assignment_wrong(
+                db_path,
+                project_name="proj",
+                topic_name="Cross-cutting",
+                youtube_video_id="vid1",
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                latest_run = conn.execute(
+                    "SELECT id FROM discovery_runs ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id AS yt_id, t.name AS topic_name
+                    FROM video_topics vt
+                    JOIN videos v ON v.id = vt.video_id
+                    JOIN topics t ON t.id = vt.topic_id
+                    WHERE vt.discovery_run_id = ?
+                    """,
+                    (latest_run["id"],),
+                ).fetchall()
+            pairs = {(row["yt_id"], row["topic_name"]) for row in rows}
+            self.assertNotIn(("vid1", "Cross-cutting"), pairs)
+            # Suppression is targeted: the primary "General" assignment for
+            # vid1 (and vid2) is untouched in the new run.
+            self.assertIn(("vid1", "General"), pairs)
+            self.assertIn(("vid2", "General"), pairs)
+
+    def test_apply_renames_to_payload_collapses_multi_hop_chain(self) -> None:
+        from yt_channel_analyzer.db import create_topic
+        from yt_channel_analyzer.discovery import _apply_renames_to_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            anchor_id = create_topic(
+                db_path, project_name="proj", topic_name="anchor"
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                project_id = conn.execute(
+                    "SELECT id FROM projects WHERE name = 'proj'"
+                ).fetchone()["id"]
+                conn.executemany(
+                    """
+                    INSERT INTO topic_renames(project_id, topic_id, old_name, new_name)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    [
+                        (project_id, anchor_id, "A", "B"),
+                        (project_id, anchor_id, "B", "C"),
+                    ],
+                )
+                conn.commit()
+
+                payload = DiscoveryPayload(
+                    topics=["A"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="A",
+                            confidence=0.9,
+                            reason="cue",
+                        ),
+                    ],
+                )
+                rewritten = _apply_renames_to_payload(conn, project_id, payload)
+
+            self.assertEqual(rewritten.topics, ["C"])
+            self.assertEqual(rewritten.assignments[0].topic_name, "C")
+
+    def test_apply_renames_to_payload_dedupes_after_rewrite(self) -> None:
+        from yt_channel_analyzer.db import create_topic
+        from yt_channel_analyzer.discovery import _apply_renames_to_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            anchor_id = create_topic(
+                db_path, project_name="proj", topic_name="anchor"
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                project_id = conn.execute(
+                    "SELECT id FROM projects WHERE name = 'proj'"
+                ).fetchone()["id"]
+                conn.execute(
+                    """
+                    INSERT INTO topic_renames(project_id, topic_id, old_name, new_name)
+                    VALUES (?, ?, 'A', 'B')
+                    """,
+                    (project_id, anchor_id),
+                )
+                conn.commit()
+
+                payload = DiscoveryPayload(
+                    topics=["A", "B"],
+                    assignments=[],
+                )
+                rewritten = _apply_renames_to_payload(conn, project_id, payload)
+
+            self.assertEqual(rewritten.topics, ["B"])
+
+    def test_rename_endpoint_records_topic_renames_row(self) -> None:
+        from yt_channel_analyzer.db import rename_topic
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            rename_topic(
+                db_path,
+                project_name="proj",
+                current_name="General",
+                new_name="GeneralRenamed",
+            )
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    "SELECT old_name, new_name FROM topic_renames"
+                ).fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["old_name"], "General")
+            self.assertEqual(rows[0]["new_name"], "GeneralRenamed")
+
+
 if __name__ == "__main__":
     unittest.main()
