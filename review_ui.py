@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-07.1-discovery-subtopic-drilldown"
+UI_REVISION = "2026-05-08.1-discovery-new-topic-badge"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -344,6 +344,17 @@ HTML_PAGE = """<!doctype html>
       background: rgba(148, 163, 184, 0.12);
       border-radius: 999px;
       padding: 1px 8px;
+    }
+    .discovery-topic-new-badge {
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--good);
+      background: rgba(74, 222, 128, 0.15);
+      border-radius: 999px;
+      padding: 1px 8px;
+      vertical-align: middle;
     }
     .discovery-episode-reason {
       margin-top: 4px;
@@ -1146,6 +1157,7 @@ HTML_PAGE = """<!doctype html>
         return;
       }
       const lowThreshold = (typeof map.low_confidence_threshold === 'number') ? map.low_confidence_threshold : 0.5;
+      const newTopicNames = new Set(Array.isArray(map.new_topic_names) ? map.new_topic_names : []);
       grid.innerHTML = topics.map((topic) => {
         const confidence = (topic.avg_confidence == null) ? null : Math.max(0, Math.min(1, topic.avg_confidence));
         const pct = (confidence == null) ? '—' : `${Math.round(confidence * 100)}%`;
@@ -1171,10 +1183,13 @@ HTML_PAGE = """<!doctype html>
           : '';
         const subtopicBucketsHtml = renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold);
         const subtopicCount = topic.subtopic_count || (topic.subtopics ? topic.subtopics.length : 0);
+        const newBadgeHtml = newTopicNames.has(topic.name)
+          ? '<span class="discovery-topic-new-badge">New</span>'
+          : '';
         return `
           <article class="topic-card discovery-topic-card">
             <div class="discovery-topic-header">
-              <h3>${escapeHtml(topic.name)}</h3>
+              <h3>${escapeHtml(topic.name)}${newBadgeHtml}</h3>
               <div class="discovery-topic-actions">
                 <button class="discovery-topic-rename"
                         type="button"
@@ -2146,12 +2161,35 @@ def _resolve_primary_project_name(db_path: Path) -> str:
     return row[0]
 
 
+def _topics_introduced_in_run(
+    connection: sqlite3.Connection, channel_id: int, run_id: int
+) -> list[str]:
+    has_earlier_run = connection.execute(
+        "SELECT 1 FROM discovery_runs WHERE channel_id = ? AND id < ? LIMIT 1",
+        (channel_id, run_id),
+    ).fetchone()
+    if has_earlier_run is None:
+        return []
+    rows = connection.execute(
+        """
+        SELECT DISTINCT t.name AS name
+        FROM topics t
+        JOIN video_topics vt ON vt.topic_id = t.id
+        WHERE vt.discovery_run_id = ?
+          AND t.first_discovery_run_id = ?
+        ORDER BY t.name COLLATE NOCASE
+        """,
+        (run_id, run_id),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
 def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
         run_row = connection.execute(
             """
-            SELECT id, model, prompt_version, status, created_at
+            SELECT id, channel_id, model, prompt_version, status, created_at
             FROM discovery_runs
             ORDER BY id DESC
             LIMIT 1
@@ -2159,6 +2197,9 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
         ).fetchone()
         if run_row is None:
             return None
+        new_topic_names = _topics_introduced_in_run(
+            connection, int(run_row["channel_id"]), int(run_row["id"])
+        )
 
         topic_rows = connection.execute(
             """
@@ -2292,6 +2333,7 @@ def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
         "created_at": run_row["created_at"],
         "low_confidence_threshold": _load_low_confidence_threshold(),
         "topics": [_topic_payload(row) for row in topic_rows],
+        "new_topic_names": new_topic_names,
     }
 
 

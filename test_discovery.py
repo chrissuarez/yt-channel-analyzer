@@ -4572,6 +4572,175 @@ class StickyCurationRenameReplayTests(unittest.TestCase):
 
             self.assertEqual(rewritten.topics, ["B"])
 
+    def test_topics_introduced_in_run_returns_only_new_names(self) -> None:
+        from yt_channel_analyzer.review_ui import _topics_introduced_in_run
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            first_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: first_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            second_payload = DiscoveryPayload(
+                topics=["Health", "Business", "Tech"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Tech",
+                        confidence=0.7,
+                        reason="r",
+                    ),
+                ],
+            )
+            second_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: second_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                channel_id = conn.execute(
+                    "SELECT channel_id FROM discovery_runs WHERE id = ?",
+                    (second_run_id,),
+                ).fetchone()["channel_id"]
+                names = _topics_introduced_in_run(conn, channel_id, second_run_id)
+            self.assertEqual(names, ["Tech"])
+
+    def test_topics_introduced_in_run_empty_on_first_run(self) -> None:
+        from yt_channel_analyzer.review_ui import _topics_introduced_in_run
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                channel_id = conn.execute(
+                    "SELECT channel_id FROM discovery_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()["channel_id"]
+                names = _topics_introduced_in_run(conn, channel_id, run_id)
+            self.assertEqual(names, [])
+
+    def test_state_payload_carries_new_topic_names(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            first_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: first_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            second_payload = DiscoveryPayload(
+                topics=["Health", "Business", "Tech"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Tech",
+                        confidence=0.7,
+                        reason="r",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: second_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            topic_map = payload["discovery_topic_map"]
+            self.assertEqual(topic_map["new_topic_names"], ["Tech"])
+
+    def test_html_page_renders_new_topic_badge(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discovery-topic-new-badge", html)
+
     def test_rename_endpoint_records_topic_renames_row(self) -> None:
         from yt_channel_analyzer.db import rename_topic
 

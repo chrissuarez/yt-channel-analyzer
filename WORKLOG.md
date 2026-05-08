@@ -27,6 +27,54 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 08 / Ralph iteration 2: surface new topics introduced by re-runs
+
+### Done
+- `topics` schema: `first_discovery_run_id INTEGER` (FK
+  `discovery_runs(id) ON DELETE SET NULL`) added to `TABLE_STATEMENTS` +
+  `REQUIRED_TABLE_COLUMNS`. Recorded on first INSERT in `run_discovery`
+  (`INSERT INTO topics(project_id, name, first_discovery_run_id) VALUES
+  (?, ?, ?) ON CONFLICT DO UPDATE SET name = excluded.name`); ON CONFLICT
+  preserves the original first-seen run.
+- `_topics_introduced_in_run(connection, channel_id, run_id)` helper in
+  `review_ui.py`: returns `[]` when no earlier `discovery_runs` row
+  exists for the channel; otherwise distinct topic names where
+  `vt.discovery_run_id = run_id AND t.first_discovery_run_id = run_id`,
+  ordered by name COLLATE NOCASE.
+- `_build_discovery_topic_map` queries `discovery_runs.channel_id`
+  alongside `id` and adds `new_topic_names: [...]` (empty list, never
+  null) to the payload.
+- JS: `renderDiscoveryTopicMap` reads `map.new_topic_names` into a Set
+  and appends `<span class="discovery-topic-new-badge">New</span>` next
+  to matching `<h3>`. CSS pill mirrors `.discovery-episode-also-in`
+  (slice 05 precedent). `UI_REVISION` bumped to
+  `2026-05-08.1-discovery-new-topic-badge`.
+- 4 tests in `StickyCurationRenameReplayTests`:
+  `test_topics_introduced_in_run_returns_only_new_names`,
+  `test_topics_introduced_in_run_empty_on_first_run`,
+  `test_state_payload_carries_new_topic_names`,
+  `test_html_page_renders_new_topic_badge`.
+
+### Learned
+- `MIN(video_topics.discovery_run_id)` alone can't identify first-seen
+  run: existing `ON CONFLICT(video_id, topic_id) DO UPDATE SET
+  discovery_run_id = excluded.discovery_run_id` in `run_discovery`
+  overwrites prior runs' ids whenever the same (video, topic) reappears.
+  Hence the topics-side `first_discovery_run_id` column.
+- Comparing `topics.created_at` to `discovery_runs.created_at` would be
+  fragile with `CURRENT_TIMESTAMP` second-precision in fast tests where
+  both runs land in the same second.
+
+### Verified
+- `.ralph/verify.sh`: 179 tests, ~45s, OK (was 175; +4).
+
+### Next
+- Iteration 3: overlay box 3 loose-end round-trip test
+  `test_curation_survives_full_rerun_round_trip` (rename + mark-wrong +
+  new-topic-introduced in a single fixture), then COMPLETE.
+
+---
+
 ## 2026-05-08 — Issue 05 / Ralph iteration 3: stub round-trip multi-topic test; close-out
 
 ### Done

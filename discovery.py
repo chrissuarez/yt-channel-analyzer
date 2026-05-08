@@ -650,10 +650,11 @@ def run_discovery(
         for topic_name in payload.topics:
             cursor.execute(
                 """
-                INSERT INTO topics(project_id, name) VALUES (?, ?)
+                INSERT INTO topics(project_id, name, first_discovery_run_id)
+                VALUES (?, ?, ?)
                 ON CONFLICT(project_id, name) DO UPDATE SET name = excluded.name
                 """,
-                (project_id, topic_name),
+                (project_id, topic_name, run_id),
             )
             row = cursor.execute(
                 "SELECT id FROM topics WHERE project_id = ? AND name = ?",

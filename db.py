@@ -60,8 +60,10 @@ SCHEMA_STATEMENTS = [
         project_id INTEGER NOT NULL,
         name TEXT NOT NULL,
         description TEXT,
+        first_discovery_run_id INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+        FOREIGN KEY(first_discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
         UNIQUE(project_id, name)
     );
     """,
@@ -439,6 +441,7 @@ REQUIRED_TABLE_COLUMNS = {
         "project_id": "INTEGER NOT NULL",
         "name": "TEXT NOT NULL",
         "description": "TEXT",
+        "first_discovery_run_id": "INTEGER",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "video_topics": {
