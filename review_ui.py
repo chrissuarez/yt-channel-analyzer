@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-08.1-discovery-new-topic-badge"
+UI_REVISION = "2026-05-08.2-channel-overview-above-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -228,6 +228,14 @@ HTML_PAGE = """<!doctype html>
         radial-gradient(circle at top left, rgba(134, 239, 172, 0.10), transparent 32%),
         rgba(20, 27, 45, 0.78);
     }
+    .channel-overview { margin-bottom: 20px; }
+    .channel-overview-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .channel-overview-latest { margin-top: 8px; }
     .discovery-topic-header {
       display: flex;
       align-items: baseline;
@@ -800,6 +808,17 @@ HTML_PAGE = """<!doctype html>
       <div class="status" id="status-box">Loading channel data… If this does not change, the page hit a client-side render error.</div>
     </section>
 
+    <section class="panel channel-overview">
+      <div class="section-head">
+        <div>
+          <h2 id="channel-overview-title">Channel Overview</h2>
+          <div class="muted" id="channel-overview-subtitle"></div>
+        </div>
+      </div>
+      <div class="channel-overview-stats" id="channel-overview-stats"></div>
+      <div id="channel-overview-latest" class="channel-overview-latest"></div>
+    </section>
+
     <section class="topic-map discovery-topic-map">
       <div class="topic-map-head">
         <div>
@@ -1139,6 +1158,38 @@ HTML_PAGE = """<!doctype html>
         { current_name: currentName, new_name: newName },
         `Renamed discovery topic "${currentName}" to "${newName}".`,
       );
+    }
+
+    function renderChannelOverview(overview) {
+      const titleEl = document.getElementById('channel-overview-title');
+      const subtitleEl = document.getElementById('channel-overview-subtitle');
+      const statsEl = document.getElementById('channel-overview-stats');
+      const latestEl = document.getElementById('channel-overview-latest');
+      if (!overview) {
+        titleEl.textContent = 'Channel Overview';
+        subtitleEl.textContent = '';
+        statsEl.innerHTML = '';
+        latestEl.innerHTML = '';
+        return;
+      }
+      titleEl.textContent = overview.channel_title || 'Channel Overview';
+      subtitleEl.textContent = overview.channel_id ? `Channel ID: ${overview.channel_id}` : '';
+      const tiles = [
+        ['Videos', overview.video_count],
+        ['Transcripts', overview.transcript_count],
+        ['Topics', overview.topic_count],
+        ['Subtopics', overview.subtopic_count],
+        ['Comparison groups', overview.comparison_group_count],
+      ];
+      statsEl.innerHTML = tiles.map(([label, value]) => `
+        <div class="topic-stat"><span class="k">${escapeHtml(label)}</span><strong>${escapeHtml(value == null ? 0 : value)}</strong></div>
+      `).join('');
+      const latest = overview.latest_discovery;
+      if (!latest) {
+        latestEl.innerHTML = '<div class="muted"><strong>Latest discovery</strong> · <em>No discovery yet — run <code>analyze</code> or <code>discover</code> to start.</em></div>';
+        return;
+      }
+      latestEl.innerHTML = `<div class="muted"><strong>Latest discovery</strong> · run #${escapeHtml(latest.id)} · ${escapeHtml(latest.status)} · ${escapeHtml(latest.started_at)} · ${escapeHtml(latest.model)} · ${escapeHtml(latest.prompt_version)}</div>`;
     }
 
     function renderDiscoveryTopicMap(map) {
@@ -1666,6 +1717,7 @@ HTML_PAGE = """<!doctype html>
       renderSelect('topic-select', payload.subtopic_reviews.available_topics.map((name) => ({ name })), payload.subtopic_reviews.selected_topic, (item) => item.name, (item) => item.name);
       renderSelect('subtopic-select', payload.comparison_reviews.available_subtopics.map((name) => ({ name })), payload.comparison_reviews.selected_subtopic, (item) => item.name, (item) => item.name);
       renderContext(payload);
+      renderChannelOverview(payload.channel_overview);
       renderDiscoveryTopicMap(payload.discovery_topic_map);
       renderTopicMap(payload.topic_map);
       renderSelectedTopicDetail(payload);

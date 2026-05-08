@@ -4987,5 +4987,56 @@ class ChannelOverviewPayloadTests(unittest.TestCase):
             self.assertEqual(overview["channel_id"], "UC123")
 
 
+class ChannelOverviewHTMLTests(unittest.TestCase):
+    def test_html_page_contains_channel_overview_panel_markup(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn('id="channel-overview-title"', html)
+        self.assertIn('id="channel-overview-subtitle"', html)
+        self.assertIn('id="channel-overview-stats"', html)
+        self.assertIn('id="channel-overview-latest"', html)
+        self.assertIn('class="panel channel-overview"', html)
+
+    def test_html_page_panel_appears_above_discovery_topic_map(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        overview_idx = html.find('id="channel-overview-stats"')
+        discovery_idx = html.find('id="discovery-topic-map-grid"')
+        self.assertGreaterEqual(overview_idx, 0)
+        self.assertGreaterEqual(discovery_idx, 0)
+        self.assertLess(overview_idx, discovery_idx)
+
+    def test_html_page_wires_render_channel_overview(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function renderChannelOverview", html)
+        self.assertIn(
+            "renderChannelOverview(payload.channel_overview)", html
+        )
+
+    def test_html_page_renders_stat_tile_labels(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        for label in ("Videos", "Transcripts", "Topics", "Subtopics", "Comparison groups"):
+            self.assertIn(f"'{label}'", html)
+
+    def test_html_page_contains_latest_discovery_empty_state_copy(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("No discovery yet", html)
+        self.assertIn("<code>analyze</code>", html)
+        self.assertIn("<code>discover</code>", html)
+
+    def test_ui_revision_advances_for_channel_overview_panel(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("channel-overview", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

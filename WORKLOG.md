@@ -27,6 +27,58 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 11 / Ralph iteration 2: Channel Overview HTML panel
+
+### Done
+- New `<section class="panel channel-overview">` inserted between the
+  topbar and the Discovery Topic Map section. Header: `<h2>` channel
+  title + muted "Channel ID: <id>" subtitle. Body: 5 stat tiles
+  (Videos / Transcripts / Topics / Subtopics / Comparison groups) in a
+  new `.channel-overview-stats` auto-fit grid; tiles reuse existing
+  `.topic-stat` styling. Latest-discovery line below the tiles.
+- `renderChannelOverview(payload.channel_overview)` JS function added
+  just before `renderDiscoveryTopicMap`; wired into `render()`
+  immediately after `renderContext` and before `renderDiscoveryTopicMap`.
+  Empty-state branch (when `latest_discovery` is null) renders
+  "Latest discovery · No discovery yet — run `analyze` or `discover`
+  to start." Defensive fallback when `overview` itself is falsy
+  (clears panel, no crash) — useful once polish iteration ships the
+  no-primary-channel state.
+- Minimal CSS: `.channel-overview` (margin), `.channel-overview-stats`
+  (auto-fit grid mirroring `.topic-stats` shape), `.channel-overview-latest`.
+- `UI_REVISION` bumped to
+  `2026-05-08.2-channel-overview-above-discovery-panel`. Kept the
+  "discovery" substring because 9 existing `test_ui_revision_advances_for_*`
+  tests assert it (acts as a soft "this app is post-pivot" marker).
+- 6 new tests in `ChannelOverviewHTMLTests`: panel markup IDs;
+  ordering above the Discovery Topic Map; `renderChannelOverview`
+  defined + wired into `render()`; stat-tile labels present in JS
+  source; empty-state copy mentions `analyze` + `discover`;
+  `UI_REVISION` contains `channel-overview`.
+
+### Verified
+- `.ralph/verify.sh`: 188 tests, ~46s, OK (was 182; +6).
+
+### Notes for next iteration
+- Polish iteration (sub-plan 3): graceful no-primary-channel state
+  (`get_primary_channel(db_path)` can return `None` — the iteration 1
+  call site at line ~2627 currently dereferences `.project_id` /
+  `.channel_id` and would crash; needs a guard with an empty
+  `channel_overview` payload). Empty-DB safety check (no videos /
+  no runs / no topics — JS render already handles `null`/falsy
+  values, so the remaining work is the Python side returning an
+  inert payload).
+- Issue acceptance criteria status after this iteration:
+  ✓ payload key + counts + latest_discovery shape (iter 1)
+  ✓ panel HTML + tiles + latest-discovery block + empty copy (iter 2)
+  ✗ "renders without errors when primary_channel unset / DB empty /
+    discovery_runs empty" — final iteration.
+
+### Next
+- Iteration 3: graceful no-primary-channel state + COMPLETE.
+
+---
+
 ## 2026-05-08 — Issue 11 / Ralph iteration 1: channel_overview payload key
 
 ### Done
