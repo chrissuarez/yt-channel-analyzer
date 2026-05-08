@@ -27,6 +27,41 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 08 / Ralph iteration 3: round-trip test + COMPLETE
+
+### Done
+- `test_curation_survives_full_rerun_round_trip` in
+  `StickyCurationRenameReplayTests`: seeds Health/Business via custom
+  payload (vid1→Health, vid2→Health+Business), renames Health→Wellbeing,
+  marks (vid2, Business) wrong, runs discovery again with stub still
+  emitting the pre-curation names + a brand-new "Tech" topic. Asserts
+  simultaneously: (a) only "Wellbeing" exists with vid1+vid2 attached
+  (rename replay), (b) (vid2, Business) absent from second run's
+  `video_topics` (mark-wrong replay), (c) `_topics_introduced_in_run`
+  returns `["Tech"]` (new-topic surfacing).
+- No production code change — exercises existing replay + new-topic
+  machinery end-to-end.
+
+### Verified
+- `.ralph/verify.sh`: 180 tests, ~45s, OK (was 179; +1).
+
+### Issue 08 acceptance status
+- AC4 (rename A→B re-run) ✓ — `test_rename_then_rerun_keeps_curated_name_with_episodes`
+  + round-trip.
+- AC5 (mark-wrong re-run) ✓ — `test_mark_wrong_then_rerun_suppresses_assignment`
+  + round-trip.
+- AC6 (new topic surfaced for approval) ✓ — `_topics_introduced_in_run`
+  + `discovery-topic-new-badge` (auto-replay surfaces the diff via badge;
+  per-change approval GUI deferred per overlay).
+- AC1/2/3 (full diff GUI, per-change approve/reject) — explicitly
+  out-of-scope per `.ralph/issues/08-sticky-curation.md`. Merge/split/
+  move event logging deferred to potential issue 08b.
+
+### Next
+- Issue 08 COMPLETE; branch ready for review and merge.
+
+---
+
 ## 2026-05-08 — Issue 08 / Ralph iteration 2: surface new topics introduced by re-runs
 
 ### Done

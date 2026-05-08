@@ -4769,6 +4769,153 @@ class StickyCurationRenameReplayTests(unittest.TestCase):
             self.assertEqual(rows[0]["old_name"], "General")
             self.assertEqual(rows[0]["new_name"], "GeneralRenamed")
 
+    def test_curation_survives_full_rerun_round_trip(self) -> None:
+        from yt_channel_analyzer.db import mark_assignment_wrong, rename_topic
+        from yt_channel_analyzer.review_ui import _topics_introduced_in_run
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            first_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.7,
+                        reason="r",
+                    ),
+                ],
+            )
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: first_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            rename_topic(
+                db_path,
+                project_name="proj",
+                current_name="Health",
+                new_name="Wellbeing",
+            )
+            mark_assignment_wrong(
+                db_path,
+                project_name="proj",
+                topic_name="Business",
+                youtube_video_id="vid2",
+            )
+
+            # Second-run stub still emits the pre-curation names ("Health"
+            # for what is now "Wellbeing", "Business" for the suppressed
+            # assignment) and introduces a brand-new topic "Tech".
+            second_payload = DiscoveryPayload(
+                topics=["Health", "Business", "Tech"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Health",
+                        confidence=0.8,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.7,
+                        reason="r",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Tech",
+                        confidence=0.6,
+                        reason="r",
+                    ),
+                ],
+            )
+            second_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: second_payload,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+
+                # (a) The renamed topic survives: one row, name preserved,
+                #     all original episode assignments still point at it.
+                topic_rows = conn.execute(
+                    "SELECT id, name FROM topics WHERE name IN ('Health', 'Wellbeing')"
+                ).fetchall()
+                self.assertEqual(
+                    {row["name"] for row in topic_rows}, {"Wellbeing"}
+                )
+                self.assertEqual(len(topic_rows), 1)
+                wellbeing_id = topic_rows[0]["id"]
+                wellbeing_yt_ids = {
+                    row["yt_id"]
+                    for row in conn.execute(
+                        """
+                        SELECT v.youtube_video_id AS yt_id
+                        FROM video_topics vt
+                        JOIN videos v ON v.id = vt.video_id
+                        WHERE vt.topic_id = ?
+                        """,
+                        (wellbeing_id,),
+                    ).fetchall()
+                }
+                self.assertEqual(wellbeing_yt_ids, {"vid1", "vid2"})
+
+                # (b) The marked-wrong (vid2, Business) assignment does not
+                #     reappear in the second run's video_topics rows.
+                second_pairs = {
+                    (row["yt_id"], row["topic_name"])
+                    for row in conn.execute(
+                        """
+                        SELECT v.youtube_video_id AS yt_id, t.name AS topic_name
+                        FROM video_topics vt
+                        JOIN videos v ON v.id = vt.video_id
+                        JOIN topics t ON t.id = vt.topic_id
+                        WHERE vt.discovery_run_id = ?
+                        """,
+                        (second_run_id,),
+                    ).fetchall()
+                }
+                self.assertNotIn(("vid2", "Business"), second_pairs)
+
+                # (c) `_topics_introduced_in_run` reports the brand-new "Tech"
+                #     topic and nothing else.
+                channel_id = conn.execute(
+                    "SELECT channel_id FROM discovery_runs WHERE id = ?",
+                    (second_run_id,),
+                ).fetchone()["channel_id"]
+                names = _topics_introduced_in_run(
+                    conn, channel_id, second_run_id
+                )
+            self.assertEqual(names, ["Tech"])
+
 
 if __name__ == "__main__":
     unittest.main()
