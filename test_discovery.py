@@ -4917,5 +4917,75 @@ class StickyCurationRenameReplayTests(unittest.TestCase):
             self.assertEqual(names, ["Tech"])
 
 
+class ChannelOverviewPayloadTests(unittest.TestCase):
+    def test_state_payload_has_channel_overview_with_seeded_counts(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_payload = DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            )
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: run_payload,
+                model="haiku-stub",
+                prompt_version="discovery-v0",
+            )
+
+            payload = build_state_payload(db_path)
+            overview = payload["channel_overview"]
+            self.assertEqual(overview["channel_title"], "Channel")
+            self.assertEqual(overview["channel_id"], "UC123")
+            self.assertEqual(overview["video_count"], 2)
+            self.assertEqual(overview["transcript_count"], 0)
+            self.assertEqual(overview["topic_count"], 2)
+            self.assertEqual(overview["subtopic_count"], 0)
+            self.assertEqual(overview["comparison_group_count"], 0)
+            latest = overview["latest_discovery"]
+            self.assertIsNotNone(latest)
+            self.assertEqual(latest["id"], run_id)
+            self.assertEqual(latest["status"], "success")
+            self.assertEqual(latest["model"], "haiku-stub")
+            self.assertEqual(latest["prompt_version"], "discovery-v0")
+            self.assertIn("started_at", latest)
+            self.assertIsNotNone(latest["started_at"])
+
+    def test_state_payload_channel_overview_latest_discovery_null_when_no_run(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            payload = build_state_payload(db_path)
+            overview = payload["channel_overview"]
+            self.assertIsNone(overview["latest_discovery"])
+            self.assertEqual(overview["video_count"], 2)
+            self.assertEqual(overview["topic_count"], 0)
+            self.assertEqual(overview["subtopic_count"], 0)
+            self.assertEqual(overview["transcript_count"], 0)
+            self.assertEqual(overview["comparison_group_count"], 0)
+            self.assertEqual(overview["channel_title"], "Channel")
+            self.assertEqual(overview["channel_id"], "UC123")
+
+
 if __name__ == "__main__":
     unittest.main()

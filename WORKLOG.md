@@ -27,6 +27,48 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 11 / Ralph iteration 1: channel_overview payload key
+
+### Done
+- `_build_channel_overview(db_path, project_id, channel_id)` helper in
+  `review_ui.py` (placed before `_topics_introduced_in_run`). Single
+  `sqlite3.connect`, seven scoped reads: channel title/yt_id from
+  `channels`; video count from `videos` WHERE channel_id; transcript
+  count via `video_transcripts` JOIN videos; distinct topic count via
+  `video_topics` JOIN videos; distinct subtopic count via
+  `video_subtopics` JOIN videos; comparison-group count via
+  `comparison_group_videos` JOIN videos; latest `discovery_runs` row
+  scoped by channel_id. `latest_discovery` is `None` when no run exists,
+  else `{id, status, started_at (aliased from created_at), model,
+  prompt_version}`.
+- `build_state_payload` now surfaces a new `channel_overview` key
+  alongside `discovery_topic_map` (no refactor of the assembler).
+- 2 tests in new `ChannelOverviewPayloadTests`:
+  `test_state_payload_has_channel_overview_with_seeded_counts` (stub
+  discovery → 2 videos / 0 transcripts / 2 topics / 0 subtopics / 0
+  comparison groups + latest run metadata),
+  `test_state_payload_channel_overview_latest_discovery_null_when_no_run`
+  (empty DB → `latest_discovery` is `None`).
+
+### Verified
+- `.ralph/verify.sh`: 182 tests, ~46s, OK (was 180; +2).
+
+### Notes for next iteration
+- `discovery_runs` schema column is `created_at`; payload exposes it as
+  `started_at` per acceptance criteria — no schema change needed.
+- `comparison_groups` are scoped by subtopic, not channel directly. The
+  count uses `comparison_group_videos` JOIN videos so the number reflects
+  comparison groups that touch this channel's videos.
+- `project_id` plumbed through but unused — spec'd signature kept; the
+  polish/no-primary-channel iteration may need it.
+- Sub-plan 2 (HTML panel + JS render + HTML wiring test) is next.
+
+### Next
+- Iteration 2: render Channel Overview panel above Discovery Topic Map;
+  HTML wiring test.
+
+---
+
 ## 2026-05-08 — Issue 08 / Ralph iteration 3: round-trip test + COMPLETE
 
 ### Done

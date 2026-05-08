@@ -2161,6 +2161,89 @@ def _resolve_primary_project_name(db_path: Path) -> str:
     return row[0]
 
 
+def _build_channel_overview(
+    db_path: Path, project_id: int, channel_id: int
+) -> dict[str, Any]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        channel_row = connection.execute(
+            "SELECT youtube_channel_id, title FROM channels WHERE id = ?",
+            (channel_id,),
+        ).fetchone()
+        video_count = connection.execute(
+            "SELECT COUNT(*) FROM videos WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()[0]
+        transcript_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM video_transcripts
+            JOIN videos ON videos.id = video_transcripts.video_id
+            WHERE videos.channel_id = ?
+            """,
+            (channel_id,),
+        ).fetchone()[0]
+        topic_count = connection.execute(
+            """
+            SELECT COUNT(DISTINCT video_topics.topic_id)
+            FROM video_topics
+            JOIN videos ON videos.id = video_topics.video_id
+            WHERE videos.channel_id = ?
+            """,
+            (channel_id,),
+        ).fetchone()[0]
+        subtopic_count = connection.execute(
+            """
+            SELECT COUNT(DISTINCT video_subtopics.subtopic_id)
+            FROM video_subtopics
+            JOIN videos ON videos.id = video_subtopics.video_id
+            WHERE videos.channel_id = ?
+            """,
+            (channel_id,),
+        ).fetchone()[0]
+        comparison_group_count = connection.execute(
+            """
+            SELECT COUNT(DISTINCT comparison_group_videos.comparison_group_id)
+            FROM comparison_group_videos
+            JOIN videos ON videos.id = comparison_group_videos.video_id
+            WHERE videos.channel_id = ?
+            """,
+            (channel_id,),
+        ).fetchone()[0]
+        latest_row = connection.execute(
+            """
+            SELECT id, status, created_at, model, prompt_version
+            FROM discovery_runs
+            WHERE channel_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (channel_id,),
+        ).fetchone()
+
+    if latest_row is None:
+        latest_discovery: dict[str, Any] | None = None
+    else:
+        latest_discovery = {
+            "id": int(latest_row["id"]),
+            "status": latest_row["status"],
+            "started_at": latest_row["created_at"],
+            "model": latest_row["model"],
+            "prompt_version": latest_row["prompt_version"],
+        }
+
+    return {
+        "channel_title": channel_row["title"] if channel_row is not None else None,
+        "channel_id": channel_row["youtube_channel_id"] if channel_row is not None else None,
+        "video_count": int(video_count),
+        "transcript_count": int(transcript_count),
+        "topic_count": int(topic_count),
+        "subtopic_count": int(subtopic_count),
+        "comparison_group_count": int(comparison_group_count),
+        "latest_discovery": latest_discovery,
+    }
+
+
 def _topics_introduced_in_run(
     connection: sqlite3.Connection, channel_id: int, run_id: int
 ) -> list[str]:
@@ -2541,6 +2624,11 @@ def build_state_payload(
     )
     topic_inventory = _build_topic_inventory(db_path, topic_name=selected_topic)
     discovery_topic_map = _build_discovery_topic_map(db_path)
+    channel_overview = _build_channel_overview(
+        db_path,
+        project_id=primary_channel.project_id,
+        channel_id=primary_channel.channel_id,
+    )
 
     return {
         "db_path": str(db_path),
@@ -2555,6 +2643,7 @@ def build_state_payload(
         "topic_map": topic_map,
         "topic_inventory": topic_inventory,
         "discovery_topic_map": discovery_topic_map,
+        "channel_overview": channel_overview,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),
             "summary": topic_summary,
