@@ -5384,5 +5384,43 @@ class TopicInventoryReadinessStateTests(unittest.TestCase):
             self.assertEqual(bucket["readiness_state"], "ready")
 
 
+class ComparisonReadinessHTMLTests(unittest.TestCase):
+    def test_html_page_carries_all_three_readiness_class_strings(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("readiness ready", html)
+        self.assertIn("readiness needs-transcripts", html)
+        self.assertIn("readiness thin", html)
+
+    def test_html_page_includes_needs_transcripts_css_rule(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn(".readiness.needs-transcripts", html)
+
+    def test_html_page_template_keys_pill_off_readiness_state(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("bucket.readiness_state", html)
+
+    def test_html_page_renders_transcript_coverage_subline(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn(
+            "${bucket.transcript_count}/${bucket.video_count}", html
+        )
+        self.assertIn("transcript-coverage", html)
+
+    def test_ui_revision_advances_for_comparison_readiness(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("comparison-readiness", UI_REVISION)
+        self.assertIn("channel-overview", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

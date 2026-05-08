@@ -27,6 +27,60 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 13 / Ralph iteration 2: comparison readiness HTML + UI rev
+
+### Done
+- `topicInventoryHtml` JS now picks state-keyed class via map
+  (`{too_few: 'readiness thin', needs_transcripts:
+  'readiness needs-transcripts', ready: 'readiness ready'}`)
+  with `'readiness thin'` fallback. Used full `'readiness X'`
+  strings (not bare `X`) so the spec'd `assertIn('readiness needs-transcripts', html)`
+  pin works against the rendered page source.
+- New `<div class="transcript-coverage">${bucket.transcript_count}/${bucket.video_count} transcripts</div>`
+  sub-line under the readiness pill. Backend always populates both
+  keys, so empty bucket renders `0/0 transcripts` directly from
+  template interpolation — no JS-side defensiveness needed.
+- CSS: `.readiness.needs-transcripts` rule inserted between the two
+  existing readiness rules (amber `#fbbf24`, mirrors original `thin`
+  hue). `.readiness.thin` retuned to red `#fca5a5` /
+  `rgba(248,113,113,*)` so all three states are visually separable
+  (red → amber → green ladder). New `.transcript-coverage` muted
+  11px style for the sub-line.
+- `UI_REVISION` bumped to
+  `2026-05-08.5-comparison-readiness-run-history-advanced-channel-overview-discovery-panel`.
+  Keeps `channel-overview`, `discovery`, `run-history-advanced`
+  substrings so all 11 prior `test_ui_revision_advances_for_*`
+  assertions stay green; adds `comparison-readiness` for this slice.
+- 5 tests in new `ComparisonReadinessHTMLTests`:
+  three readiness class strings present in HTML;
+  `.readiness.needs-transcripts` CSS rule ships;
+  JS references `bucket.readiness_state`; transcript-coverage
+  template fragment + class present; `UI_REVISION` carries the
+  three required substrings.
+
+### Verified
+- `.ralph/verify.sh`: 209 tests, ~49s, OK (was 204; +5).
+
+### Issue 13 acceptance status
+- AC1 (transcript_count/processed_count, dedupe) ✓ — iter 1.
+- AC2 (3-state readiness ladder) ✓ — iter 1.
+- AC3 (per-state labels + next_step copy) ✓ — iter 1.
+- AC4 (`comparison_ready` back-compat alias) ✓ — iter 1.
+- AC5 (state-keyed pill class, all 3 strings in source) ✓ — iter 2.
+- AC6 (`.readiness.needs-transcripts` CSS) ✓ — iter 2.
+- AC7 (transcript-coverage sub-line + `0/0` empty case) ✓ — iter 2.
+- AC8 (`UI_REVISION` carries all 3 substrings) ✓ — iter 2.
+- AC9 (3-state fixture coverage + HTML tests) ✓ — iter 1 + 2.
+- AC10 (verify gate green) ✓.
+
+### Next
+- Iteration 3: loose-end polish + COMPLETE — verify
+  `comparison_ready` callers, empty-bucket render, LEFT JOIN
+  cardinality once more (already covered by `test_transcript_and_processed_counts_dedupe_per_video`),
+  then emit COMPLETE.
+
+---
+
 ## 2026-05-08 — Issue 11 / Ralph iteration 3: polish + COMPLETE
 
 ### Done

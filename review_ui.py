@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-08.4-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-08.5-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -626,7 +626,9 @@ HTML_PAGE = """<!doctype html>
       border: 1px solid rgba(255,255,255,0.08);
     }
     .readiness.ready { color: #86efac; background: rgba(34,197,94,0.10); border-color: rgba(34,197,94,0.24); }
-    .readiness.thin { color: #fbbf24; background: rgba(251,191,36,0.10); border-color: rgba(251,191,36,0.24); }
+    .readiness.needs-transcripts { color: #fbbf24; background: rgba(251,191,36,0.10); border-color: rgba(251,191,36,0.24); }
+    .readiness.thin { color: #fca5a5; background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.24); }
+    .transcript-coverage { color: var(--muted); font-size: 11px; margin-top: 4px; }
     .subtopic-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
     @media (max-width: 900px) { .topic-inventory { grid-template-columns: 1fr; } }
     .grid {
@@ -1466,11 +1468,17 @@ HTML_PAGE = """<!doctype html>
             const chips = bucket.videos.length
               ? bucket.videos.map((v) => subtopicVideoChipHtml(v, topicName, bucket.name, candidates)).join('')
               : '<div class="muted">No videos assigned yet.</div>';
+            const readinessClass = ({
+              too_few: 'readiness thin',
+              needs_transcripts: 'readiness needs-transcripts',
+              ready: 'readiness ready',
+            })[bucket.readiness_state] || 'readiness thin';
             return `
             <div class="subtopic-bucket">
               <strong>${escapeHtml(bucket.name)}</strong>
               <span class="pill">${escapeHtml(bucket.videos.length)} video(s)</span>
-              <span class="readiness ${bucket.comparison_ready ? 'ready' : 'thin'}">${bucket.readiness_label}</span>
+              <span class="${readinessClass}">${bucket.readiness_label}</span>
+              <div class="transcript-coverage">${bucket.transcript_count}/${bucket.video_count} transcripts</div>
               <div class="muted">${escapeHtml(bucket.next_step || '')}</div>
               <div class="video-list">
                 ${chips}
