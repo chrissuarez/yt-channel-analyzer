@@ -27,6 +27,47 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-08 — Issue 11 / Ralph iteration 3: polish + COMPLETE
+
+### Done
+- `build_state_payload` now wraps `get_primary_channel(db_path)` in
+  `try/except ValueError` (the function raises rather than returns
+  `None` — agent notes in the issue spec were aspirational).
+  When no primary channel exists, `channel_overview`, `channel_title`,
+  and `channel_id` all return `None` so `/api/state` no longer 400s
+  on an unconfigured DB.
+- `renderChannelOverview` empty-overview branch now sets the subtitle
+  to "No primary channel set" so the panel renders a meaningful
+  header instead of a blank one.
+- `UI_REVISION` bumped to
+  `2026-05-08.3-channel-overview-no-primary-channel-discovery-panel`.
+  Keeps both `channel-overview` and `discovery` substrings so all 9
+  prior `test_ui_revision_advances_for_*` tests stay green.
+- 2 new tests:
+  `test_state_payload_channel_overview_null_when_no_primary_channel`
+  (empty DB doesn't raise; channel_* keys all `None`),
+  `test_html_page_renders_no_primary_channel_hint`.
+
+### Verified
+- `.ralph/verify.sh`: 190 tests, ~47s, OK (was 188; +2).
+
+### Issue 11 acceptance status
+- AC1 (`channel_overview` payload key + counts + `latest_discovery`
+  shape) ✓ — iter 1.
+- AC2 (panel above Discovery Topic Map + tiles + empty-state copy)
+  ✓ — iter 2.
+- AC3 (renders without errors when `primary_channel` unset / DB
+  empty / `discovery_runs` empty) ✓ — iter 3 (no-primary path) +
+  iter 1 (empty-DB-with-channel + no-runs paths).
+- AC4 (payload-shape + HTML wiring tests) ✓ — 9 tests across
+  `ChannelOverviewPayloadTests` + `ChannelOverviewHTMLTests`.
+
+### Next
+- Issue 11 COMPLETE; branch `feat/issue-11-channel-overview` ready
+  for review and merge.
+
+---
+
 ## 2026-05-08 — Issue 11 / Ralph iteration 2: Channel Overview HTML panel
 
 ### Done

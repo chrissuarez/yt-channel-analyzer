@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-08.2-channel-overview-above-discovery-panel"
+UI_REVISION = "2026-05-08.3-channel-overview-no-primary-channel-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -1167,7 +1167,7 @@ HTML_PAGE = """<!doctype html>
       const latestEl = document.getElementById('channel-overview-latest');
       if (!overview) {
         titleEl.textContent = 'Channel Overview';
-        subtitleEl.textContent = '';
+        subtitleEl.textContent = 'No primary channel set';
         statsEl.innerHTML = '';
         latestEl.innerHTML = '';
         return;
@@ -2481,7 +2481,10 @@ def build_state_payload(
     sample_limit: int = 3,
 ) -> dict[str, Any]:
     db_path = Path(db_path)
-    primary_channel = get_primary_channel(db_path)
+    try:
+        primary_channel = get_primary_channel(db_path)
+    except ValueError:
+        primary_channel = None
     topic_generation_candidates = [dict(row) for row in list_videos_for_topic_suggestions(db_path)]
     runs = _enrich_runs_with_subtopic_counts(db_path, [dict(row) for row in list_topic_suggestion_runs(db_path)])
     latest_run_id = get_latest_topic_suggestion_run_id(db_path)
@@ -2676,18 +2679,21 @@ def build_state_payload(
     )
     topic_inventory = _build_topic_inventory(db_path, topic_name=selected_topic)
     discovery_topic_map = _build_discovery_topic_map(db_path)
-    channel_overview = _build_channel_overview(
-        db_path,
-        project_id=primary_channel.project_id,
-        channel_id=primary_channel.channel_id,
-    )
+    if primary_channel is None:
+        channel_overview = None
+    else:
+        channel_overview = _build_channel_overview(
+            db_path,
+            project_id=primary_channel.project_id,
+            channel_id=primary_channel.channel_id,
+        )
 
     return {
         "db_path": str(db_path),
         "dataset_name": db_path.name,
         "dataset_video_count": len(topic_generation_candidates),
-        "channel_title": primary_channel.title,
-        "channel_id": primary_channel.youtube_channel_id,
+        "channel_title": primary_channel.title if primary_channel is not None else None,
+        "channel_id": primary_channel.youtube_channel_id if primary_channel is not None else None,
         "run_id": resolved_run_id,
         "latest_run_id": latest_run_id,
         "runs": runs,

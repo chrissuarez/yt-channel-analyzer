@@ -4986,6 +4986,16 @@ class ChannelOverviewPayloadTests(unittest.TestCase):
             self.assertEqual(overview["channel_title"], "Channel")
             self.assertEqual(overview["channel_id"], "UC123")
 
+    def test_state_payload_channel_overview_null_when_no_primary_channel(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "empty.sqlite3"
+            payload = build_state_payload(db_path)
+            self.assertIsNone(payload["channel_overview"])
+            self.assertIsNone(payload["channel_title"])
+            self.assertIsNone(payload["channel_id"])
+
 
 class ChannelOverviewHTMLTests(unittest.TestCase):
     def test_html_page_contains_channel_overview_panel_markup(self) -> None:
@@ -5036,6 +5046,12 @@ class ChannelOverviewHTMLTests(unittest.TestCase):
         from yt_channel_analyzer.review_ui import UI_REVISION
 
         self.assertIn("channel-overview", UI_REVISION)
+
+    def test_html_page_renders_no_primary_channel_hint(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("No primary channel set", html)
 
 
 if __name__ == "__main__":
