@@ -105,6 +105,14 @@ The smallest version of the app that solves a real user problem ("which episodes
 - [x] Update `YT_ANALYZER_CHEATSHEET.md` to reflect the new primary commands
 - [x] First real run: ingest Diary of a CEO, run discovery, review the resulting topic map *(also subsumes issue 03 criterion 6: validate ≥2 subtopics per topic on a real channel — 2.17 avg; also subsumes issue 04 criterion 5: validate model-emitted confidence + reason quality on a real channel — spread 0.85–0.95, reasons grounded in titles; evidence: `.scratch/issue-10/doac-smoke-20260507-221241.log`)*
 
+#### A6. GUI plan finish — Channel Overview
+
+Implements the **Channel Overview** section from `GUI_UX_PLAN.md` (the only fully-missing section of the five top-level sections in that plan; Priority 2 run-ID demote and Priority 4 transcript-aware comparison readiness will land in subsequent slices).
+
+- [ ] Add `_build_channel_overview(db_path, project_id, channel_id) -> dict` helper to `review_ui.py` and surface it under a new `channel_overview` key on the `/api/state` payload. Counts to surface: channel title + id, total video count, transcript count (from `video_transcripts`), distinct topic count (topics with at least one `video_topics` row in this channel), distinct subtopic count (same shape via `video_subtopics`), comparison group count, latest `discovery_runs` row for this channel (id, status, started_at, model, prompt_version, plus a flag for whether any has ever run). Use a single connection / minimal queries — extend the existing connection pattern; no new module. Persistence-shape test in `test_discovery.py` or a new `test_review_ui.py` asserts every key is present and counts match a seeded stub-discovery fixture.
+- [ ] Render the Channel Overview panel as a new top-of-page section in `review_ui.py` HTML (above the existing Discovery Topic Map). Panel header shows channel title + id; body is a row of stat tiles (Videos / Transcripts / Topics / Subtopics / Comparison groups) plus a "Latest discovery" block showing run id + status + started_at + model + prompt_version. Empty state: when no `discovery_runs` row exists, the latest-discovery block shows "No discovery yet — run `analyze` or `discover` to start." HTML wiring test asserts the panel renders with the seeded fixture values and that the empty-state copy appears when no discovery has run.
+- [ ] Loose-end polish + COMPLETE: ensure the panel doesn't double-count or break when `primary_channel` is unset (graceful "no primary channel" state); confirm `UI_REVISION` is bumped if the JS shape changed; ensure empty-DB integration path (no videos, no runs, no topics) renders without errors. Final iteration emits COMPLETE.
+
 ---
 
 ## Future phases (planned, not active)
