@@ -57,7 +57,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-08.3-channel-overview-no-primary-channel-discovery-panel"
+UI_REVISION = "2026-05-08.4-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -180,6 +180,23 @@ HTML_PAGE = """<!doctype html>
       margin-top: 16px;
       padding-top: 16px;
       border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .run-history-advanced {
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+    }
+    .run-history-advanced > summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .run-history-advanced .run-history-hint {
+      margin-top: 8px;
+    }
+    .run-history-advanced > label {
+      margin-top: 8px;
+      max-width: 320px;
     }
     label {
       display: flex;
@@ -777,10 +794,6 @@ HTML_PAGE = """<!doctype html>
       <div id="context-grid" class="context-grid"></div>
       <div class="controls row">
         <label>
-          Suggestion run
-          <select id="run-select"></select>
-        </label>
-        <label>
           Topic for subtopic review
           <select id="topic-select"></select>
         </label>
@@ -805,6 +818,14 @@ HTML_PAGE = """<!doctype html>
           <button id="generate-subtopics-btn">Generate subtopic suggestions</button>
         </div>
       </div>
+      <details class="run-history-advanced">
+        <summary>Run history (advanced)</summary>
+        <div class="muted run-history-hint">Pick an older run to inspect its labels. Routine review uses the latest run automatically.</div>
+        <label>
+          Suggestion run
+          <select id="run-select"></select>
+        </label>
+      </details>
       <div class="status" id="status-box">Loading channel data… If this does not change, the page hit a client-side render error.</div>
     </section>
 

@@ -5054,5 +5054,56 @@ class ChannelOverviewHTMLTests(unittest.TestCase):
         self.assertIn("No primary channel set", html)
 
 
+class RunHistoryAdvancedHTMLTests(unittest.TestCase):
+    def test_html_page_wraps_run_select_in_run_history_details(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        details_start = html.find('<details class="run-history-advanced">')
+        self.assertGreaterEqual(details_start, 0)
+        details_end = html.find("</details>", details_start)
+        self.assertGreater(details_end, details_start)
+        details_block = html[details_start:details_end]
+        self.assertIn('id="run-select"', details_block)
+        self.assertIn("Run history (advanced)", details_block)
+
+    def test_run_select_no_longer_in_primary_controls_row(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        controls_start = html.find('<div class="controls row">')
+        self.assertGreaterEqual(controls_start, 0)
+        controls_end = html.find("</div>", controls_start)
+        self.assertGreater(controls_end, controls_start)
+        primary_controls = html[controls_start:controls_end]
+        self.assertNotIn('id="run-select"', primary_controls)
+
+    def test_topic_and_subtopic_selects_remain_in_primary_controls_row(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        controls_start = html.find('<div class="controls row">')
+        controls_end = html.find("</div>", controls_start)
+        primary_controls = html[controls_start:controls_end]
+        self.assertIn('id="topic-select"', primary_controls)
+        self.assertIn('id="subtopic-select"', primary_controls)
+
+    def test_run_history_block_contains_advanced_hint(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn(
+            "Pick an older run to inspect its labels. Routine review uses the latest run automatically.",
+            html,
+        )
+
+    def test_ui_revision_advances_for_run_history_advanced(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("channel-overview", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+        self.assertIn("run-history-advanced", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

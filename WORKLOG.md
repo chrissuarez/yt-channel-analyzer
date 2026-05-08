@@ -1666,3 +1666,13 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - 5 new tests in `StickyCurationRenameReplayTests`: rename-then-rerun keeps curated name with both episodes still attached and no orphan old-name row; mark-wrong-then-rerun has the suppressed `(vid, topic)` pair absent from the new run's `video_topics` (siblings preserved); multi-hop A→B then B→C collapses incoming "A" to "C"; dedupe after rewrite ([A, B] with A→B → [B]); rename API records exactly one `topic_renames` row with the right old/new pair.
 - Verify gate: 175 tests green (~44s; +5 vs prior iter).
 - Next iteration (slice 08 box 2): `_topics_introduced_in_run` helper + `new_topic_names` payload + JS "New" badge.
+
+## 2026-05-08 — Slice 12 run-ID demote: relocate run-select into Run history (advanced) (Ralph iter 1)
+
+- Moved `<label>Suggestion run / <select id="run-select"></select></label>` out of the topbar primary `<div class="controls row">` into a new `<details class="run-history-advanced">` placed between the `.generator` close and the `status-box` div, still inside `<section class="topbar">`. Markup-only change — JS, event listeners, data flow untouched (`document.getElementById("run-select")` still resolves; only its DOM parent moved).
+- `<details>` body: `<summary>Run history (advanced)</summary>`, `.run-history-hint` muted line ("Pick an older run to inspect its labels. Routine review uses the latest run automatically."), then the original `<label>` wrapping `<select id="run-select">`. Default collapsed (no `open` attribute).
+- Minimal CSS in the existing `<style>` block: `.run-history-advanced` border-top + margin mirroring `.generator`; `> summary { cursor: pointer; color: var(--muted); }`; `> label { max-width: 320px }` so the select does not stretch the topbar.
+- `UI_REVISION` → `2026-05-08.4-run-history-advanced-channel-overview-discovery-panel` (keeps `channel-overview` + `discovery` substrings — all 10 `test_ui_revision_advances_for_*` assertions stay green).
+- 5 new tests in `RunHistoryAdvancedHTMLTests`: (1) `<details class="run-history-advanced">` wraps `id="run-select"` + summary copy ships, (2) primary `.controls.row` no longer contains `id="run-select"`, (3) `id="topic-select"` + `id="subtopic-select"` remain inside primary `.controls.row`, (4) hint copy renders, (5) `UI_REVISION` carries all three required substrings.
+- Verify gate: 195 tests green (~47s; +5 vs prior iter).
+- Next iteration (slice 12 box 2): `_latest_subtopic_run_id_for_topic` helper + `latest_subtopic_run_id_by_topic` payload + JS topic-select handler tweak so changing the parent topic snaps `run-select` to the latest run that has subtopic labels for that topic.
