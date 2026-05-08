@@ -5219,5 +5219,170 @@ class LatestSubtopicRunIdByTopicTests(unittest.TestCase):
         self.assertIn("run-select", handler_block)
 
 
+class TopicInventoryReadinessStateTests(unittest.TestCase):
+    def _seed_subtopic_with_videos(
+        self,
+        db_path: Path,
+        *,
+        topic_name: str = "Health",
+        subtopic_name: str = "Sleep",
+        video_count: int,
+        transcripts_available: int = 0,
+        processed_ok: int = 0,
+        extra_transcript_rows_per_video: int = 0,
+    ) -> None:
+        init_db(
+            db_path,
+            project_name="proj",
+            channel_id="UC123",
+            channel_title="Channel",
+            channel_handle="@channel",
+        )
+        videos = [
+            VideoMetadata(
+                youtube_video_id=f"vid{i}",
+                title=f"Episode {i}",
+                description=f"desc {i}",
+                published_at=f"2026-04-{i:02d}T12:00:00Z",
+                thumbnail_url=None,
+            )
+            for i in range(1, video_count + 1)
+        ]
+        upsert_videos_for_primary_channel(db_path, videos=videos)
+        with connect(db_path) as conn:
+            project_id = conn.execute("SELECT id FROM projects").fetchone()[0]
+            conn.execute(
+                "INSERT INTO topics(project_id, name) VALUES (?, ?)",
+                (project_id, topic_name),
+            )
+            topic_id = conn.execute(
+                "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+                (project_id, topic_name),
+            ).fetchone()[0]
+            conn.execute(
+                "INSERT INTO subtopics(topic_id, name) VALUES (?, ?)",
+                (topic_id, subtopic_name),
+            )
+            subtopic_id = conn.execute(
+                "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+                (topic_id, subtopic_name),
+            ).fetchone()[0]
+            video_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM videos ORDER BY id"
+                ).fetchall()
+            ]
+            for vid_id in video_ids:
+                conn.execute(
+                    "INSERT INTO video_subtopics(video_id, subtopic_id, assignment_source)"
+                    " VALUES (?, ?, 'manual')",
+                    (vid_id, subtopic_id),
+                )
+            for vid_id in video_ids[:transcripts_available]:
+                conn.execute(
+                    "INSERT INTO video_transcripts(video_id, transcript_status)"
+                    " VALUES (?, 'available')",
+                    (vid_id,),
+                )
+            for vid_id in video_ids[:processed_ok]:
+                conn.execute(
+                    "INSERT INTO processed_videos(video_id, processing_status)"
+                    " VALUES (?, 'processed')",
+                    (vid_id,),
+                )
+            conn.commit()
+
+    def test_too_few_state_under_threshold(self) -> None:
+        from yt_channel_analyzer.review_ui import _build_topic_inventory
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_subtopic_with_videos(
+                db_path,
+                video_count=2,
+                transcripts_available=2,
+                processed_ok=1,
+            )
+            inventory = _build_topic_inventory(db_path, topic_name="Health")
+            self.assertIsNotNone(inventory)
+            self.assertEqual(len(inventory["subtopics"]), 1)
+            bucket = inventory["subtopics"][0]
+            self.assertEqual(bucket["video_count"], 2)
+            self.assertEqual(bucket["readiness_state"], "too_few")
+            self.assertEqual(bucket["readiness_label"], "Too thin to compare")
+            self.assertIn("Needs 3 more video", bucket["next_step"])
+            self.assertEqual(bucket["transcript_count"], 2)
+            self.assertEqual(bucket["processed_count"], 1)
+            self.assertFalse(bucket["comparison_ready"])
+
+    def test_needs_transcripts_state_enough_videos_zero_transcripts(self) -> None:
+        from yt_channel_analyzer.review_ui import _build_topic_inventory
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_subtopic_with_videos(
+                db_path,
+                video_count=5,
+                transcripts_available=0,
+                processed_ok=0,
+            )
+            inventory = _build_topic_inventory(db_path, topic_name="Health")
+            bucket = inventory["subtopics"][0]
+            self.assertEqual(bucket["video_count"], 5)
+            self.assertEqual(bucket["readiness_state"], "needs_transcripts")
+            self.assertEqual(
+                bucket["readiness_label"], "Enough videos, no transcripts"
+            )
+            self.assertIn("Fetch transcripts", bucket["next_step"])
+            self.assertEqual(bucket["transcript_count"], 0)
+            self.assertEqual(bucket["processed_count"], 0)
+            self.assertFalse(bucket["comparison_ready"])
+
+    def test_ready_state_enough_videos_with_transcripts(self) -> None:
+        from yt_channel_analyzer.review_ui import _build_topic_inventory
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_subtopic_with_videos(
+                db_path,
+                video_count=5,
+                transcripts_available=3,
+                processed_ok=2,
+            )
+            inventory = _build_topic_inventory(db_path, topic_name="Health")
+            bucket = inventory["subtopics"][0]
+            self.assertEqual(bucket["video_count"], 5)
+            self.assertEqual(bucket["readiness_state"], "ready")
+            self.assertEqual(bucket["readiness_label"], "Ready for comparison")
+            self.assertEqual(
+                bucket["next_step"],
+                "Enough videos to generate comparison-group suggestions.",
+            )
+            self.assertEqual(bucket["transcript_count"], 3)
+            self.assertEqual(bucket["processed_count"], 2)
+            self.assertTrue(bucket["comparison_ready"])
+
+    def test_transcript_and_processed_counts_dedupe_per_video(self) -> None:
+        """A video with both an available transcript and a processed row counts
+        once for transcripts and once for processed — no Cartesian inflation."""
+        from yt_channel_analyzer.review_ui import _build_topic_inventory
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_subtopic_with_videos(
+                db_path,
+                video_count=5,
+                transcripts_available=5,
+                processed_ok=5,
+            )
+            inventory = _build_topic_inventory(db_path, topic_name="Health")
+            bucket = inventory["subtopics"][0]
+            self.assertEqual(bucket["video_count"], 5)
+            self.assertEqual(bucket["transcript_count"], 5)
+            self.assertEqual(bucket["processed_count"], 5)
+            self.assertEqual(bucket["readiness_state"], "ready")
+
+
 if __name__ == "__main__":
     unittest.main()

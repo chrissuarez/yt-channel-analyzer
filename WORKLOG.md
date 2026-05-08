@@ -1687,3 +1687,13 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - Verify gate: 200 tests green (~48s; +5 vs prior iter).
 - Issue 12 acceptance criteria 1–8 all met. Branch ready for review.
 - Note: prompt referenced `.scratch/phase-a-topic-map/issues/12-*.md` but the issue spec actually lives at `.ralph/issues/12-run-id-demote.md` — flagged in iteration summary. (Pattern matches issue 11; issue files for slices that ship as Ralph overlays live under `.ralph/issues/` not `.scratch/...`.)
+
+## 2026-05-08 — Slice 13 comparison readiness: 3-state inventory backend (Ralph iter 1)
+
+- `_build_topic_inventory` SELECT extended with `LEFT JOIN video_transcripts ... AND transcript_status = 'available'` and `LEFT JOIN processed_videos ... AND processing_status = 'processed'`, carrying per-row `transcript_available`/`processed_ok` boolean columns + `videos.id AS video_id`. Both side tables PK on `video_id` so no Cartesian inflation; defensive `_seen_video_ids` set per bucket guards against future schema drift.
+- Aggregation walks rows once: bucket gets `transcript_count`/`processed_count` increments only on first sight per video. Empty subtopic (`youtube_video_id IS NULL` from outer join) skipped before counting.
+- Readiness branch rewritten as 3-arm if/elif/else: `video_count < 5` → `too_few` (existing "Too thin to compare" / "Needs N more video(s)..." copy preserved); `transcript_count == 0` → `needs_transcripts` ("Enough videos, no transcripts" / "Fetch transcripts for these videos before generating comparison groups."); else → `ready` (existing copy preserved). `bucket["comparison_ready"]` derived as `readiness_state == "ready"` so existing boolean callers keep working unchanged.
+- 4 new tests in `TopicInventoryReadinessStateTests`: too_few with 2 videos + 2 transcripts (transcripts irrelevant when under threshold); needs_transcripts with 5 videos + 0 transcripts; ready with 5 videos + 3 transcripts + 2 processed; dedupe sanity with 5 videos all having both transcript+processed rows → counts stay at 5/5 (no inflation across the two side joins).
+- Verify gate: 204 tests green (~50s; +4 vs prior iter).
+- HTML pill / CSS / `UI_REVISION` bump intentionally deferred to issue-13 box 2 next iteration (per ROADMAP §A8 split).
+- Note: prompt referenced `.scratch/phase-a-topic-map/issues/13-*.md` but issue spec lives at `.ralph/issues/13-comparison-readiness.md` (same pattern as issues 11 + 12 — Ralph-overlay issue files live under `.ralph/issues/`).

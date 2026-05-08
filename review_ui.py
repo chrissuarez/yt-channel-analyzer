@@ -2205,12 +2205,23 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
             SELECT
                 subtopics.id AS subtopic_id,
                 subtopics.name AS subtopic_name,
+                videos.id AS video_id,
                 videos.youtube_video_id,
-                videos.title
+                videos.title,
+                CASE WHEN video_transcripts.video_id IS NOT NULL THEN 1 ELSE 0 END
+                    AS transcript_available,
+                CASE WHEN processed_videos.video_id IS NOT NULL THEN 1 ELSE 0 END
+                    AS processed_ok
             FROM subtopics
             JOIN topics ON topics.id = subtopics.topic_id
             LEFT JOIN video_subtopics ON video_subtopics.subtopic_id = subtopics.id
             LEFT JOIN videos ON videos.id = video_subtopics.video_id
+            LEFT JOIN video_transcripts
+                ON video_transcripts.video_id = videos.id
+               AND video_transcripts.transcript_status = 'available'
+            LEFT JOIN processed_videos
+                ON processed_videos.video_id = videos.id
+               AND processed_videos.processing_status = 'processed'
             WHERE topics.name = ?
             ORDER BY subtopics.name COLLATE NOCASE, videos.published_at DESC, videos.id DESC
             """,
@@ -2239,24 +2250,50 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
     for row in subtopic_rows:
         bucket = buckets.setdefault(
             int(row["subtopic_id"]),
-            {"name": row["subtopic_name"], "videos": []},
+            {
+                "name": row["subtopic_name"],
+                "videos": [],
+                "_seen_video_ids": set(),
+                "transcript_count": 0,
+                "processed_count": 0,
+            },
         )
-        if row["youtube_video_id"] is not None:
-            bucket["videos"].append(
-                {"youtube_video_id": row["youtube_video_id"], "title": row["title"]}
-            )
+        if row["youtube_video_id"] is None:
+            continue
+        video_id = int(row["video_id"])
+        if video_id in bucket["_seen_video_ids"]:
+            continue
+        bucket["_seen_video_ids"].add(video_id)
+        bucket["videos"].append(
+            {"youtube_video_id": row["youtube_video_id"], "title": row["title"]}
+        )
+        if int(row["transcript_available"] or 0):
+            bucket["transcript_count"] += 1
+        if int(row["processed_ok"] or 0):
+            bucket["processed_count"] += 1
     subtopic_buckets = list(buckets.values())
     for bucket in subtopic_buckets:
+        bucket.pop("_seen_video_ids", None)
         video_count = len(bucket["videos"])
         bucket["video_count"] = video_count
-        bucket["comparison_ready"] = video_count >= MIN_NEW_SUBTOPIC_CLUSTER_SIZE
-        if bucket["comparison_ready"]:
-            bucket["readiness_label"] = "Ready for comparison"
-            bucket["next_step"] = "Enough videos to generate comparison-group suggestions."
-        else:
+        if video_count < MIN_NEW_SUBTOPIC_CLUSTER_SIZE:
+            bucket["readiness_state"] = "too_few"
             needed = MIN_NEW_SUBTOPIC_CLUSTER_SIZE - video_count
             bucket["readiness_label"] = "Too thin to compare"
-            bucket["next_step"] = f"Needs {needed} more video(s) before comparison groups are useful."
+            bucket["next_step"] = (
+                f"Needs {needed} more video(s) before comparison groups are useful."
+            )
+        elif bucket["transcript_count"] == 0:
+            bucket["readiness_state"] = "needs_transcripts"
+            bucket["readiness_label"] = "Enough videos, no transcripts"
+            bucket["next_step"] = (
+                "Fetch transcripts for these videos before generating comparison groups."
+            )
+        else:
+            bucket["readiness_state"] = "ready"
+            bucket["readiness_label"] = "Ready for comparison"
+            bucket["next_step"] = "Enough videos to generate comparison-group suggestions."
+        bucket["comparison_ready"] = bucket["readiness_state"] == "ready"
     return {
         "topic": topic_name,
         "subtopics": subtopic_buckets,
