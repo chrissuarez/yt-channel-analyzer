@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
@@ -617,121 +618,95 @@ def run_discovery(
 
         try:
             payload = llm(videos)
-        except Exception:
+        except Exception as exc:
             # LLM (or its retry) failed — record an errored run row so the
             # failure is auditable, persist no partial topic / assignment
             # state, and re-raise for the caller. Slice 02 acceptance:
             # "on second failure the run is marked errored and no partial
-            # state is persisted".
+            # state is persisted". No raw_response: the LLM raised before
+            # returning a payload.
             err_cursor = connection.cursor()
             err_cursor.execute(
                 """
-                INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
-                VALUES (?, ?, ?, 'error')
+                INSERT INTO discovery_runs(
+                    channel_id, model, prompt_version, status, error_message
+                )
+                VALUES (?, ?, ?, 'error', ?)
                 """,
-                (channel_id, model, prompt_version),
+                (channel_id, model, prompt_version, str(exc)),
             )
             connection.commit()
             raise
 
-        payload = _apply_renames_to_payload(connection, project_id, payload)
+        raw_payload = payload
+        try:
+            payload = _apply_renames_to_payload(connection, project_id, payload)
 
-        cursor = connection.cursor()
-        cursor.execute(
-            """
-            INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
-            VALUES (?, ?, ?, 'success')
-            """,
-            (channel_id, model, prompt_version),
-        )
-        run_id = cursor.lastrowid
-
-        topic_id_by_name: dict[str, int] = {}
-        for topic_name in payload.topics:
+            cursor = connection.cursor()
             cursor.execute(
                 """
-                INSERT INTO topics(project_id, name, first_discovery_run_id)
-                VALUES (?, ?, ?)
-                ON CONFLICT(project_id, name) DO UPDATE SET name = excluded.name
+                INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
+                VALUES (?, ?, ?, 'success')
                 """,
-                (project_id, topic_name, run_id),
+                (channel_id, model, prompt_version),
             )
-            row = cursor.execute(
-                "SELECT id FROM topics WHERE project_id = ? AND name = ?",
-                (project_id, topic_name),
-            ).fetchone()
-            topic_id_by_name[topic_name] = row["id"]
+            run_id = cursor.lastrowid
 
-        subtopic_id_by_pair: dict[tuple[int, str], int] = {}
-        for subtopic in payload.subtopics:
-            parent_topic_id = topic_id_by_name.get(subtopic.parent_topic)
-            if parent_topic_id is None:
-                raise ValueError(
-                    "subtopic references topic not in payload.topics: "
-                    f"{subtopic.parent_topic}"
+            topic_id_by_name: dict[str, int] = {}
+            for topic_name in payload.topics:
+                cursor.execute(
+                    """
+                    INSERT INTO topics(project_id, name, first_discovery_run_id)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(project_id, name) DO UPDATE SET name = excluded.name
+                    """,
+                    (project_id, topic_name, run_id),
                 )
-            cursor.execute(
-                """
-                INSERT INTO subtopics(topic_id, name) VALUES (?, ?)
-                ON CONFLICT(topic_id, name) DO UPDATE SET name = excluded.name
-                """,
-                (parent_topic_id, subtopic.name),
-            )
-            row = cursor.execute(
-                "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
-                (parent_topic_id, subtopic.name),
-            ).fetchone()
-            subtopic_id_by_pair[(parent_topic_id, subtopic.name)] = row["id"]
+                row = cursor.execute(
+                    "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+                    (project_id, topic_name),
+                ).fetchone()
+                topic_id_by_name[topic_name] = row["id"]
 
-        for assignment in payload.assignments:
-            video_id = video_id_by_yt.get(assignment.youtube_video_id)
-            if video_id is None:
-                raise ValueError(
-                    f"unknown video in discovery payload: {assignment.youtube_video_id}"
-                )
-            topic_id = topic_id_by_name.get(assignment.topic_name)
-            if topic_id is None:
-                raise ValueError(
-                    f"assignment references topic not in payload.topics: {assignment.topic_name}"
-                )
-            cursor.execute(
-                """
-                INSERT INTO video_topics(
-                    video_id, topic_id, assignment_type, assignment_source,
-                    confidence, reason, discovery_run_id
-                ) VALUES (?, ?, 'secondary', 'auto', ?, ?, ?)
-                ON CONFLICT(video_id, topic_id) DO UPDATE SET
-                    assignment_source = excluded.assignment_source,
-                    confidence = excluded.confidence,
-                    reason = excluded.reason,
-                    discovery_run_id = excluded.discovery_run_id
-                """,
-                (
-                    video_id,
-                    topic_id,
-                    assignment.confidence,
-                    assignment.reason,
-                    run_id,
-                ),
-            )
-
-            if assignment.subtopic_name:
-                subtopic_id = subtopic_id_by_pair.get(
-                    (topic_id, assignment.subtopic_name)
-                )
-                if subtopic_id is None:
+            subtopic_id_by_pair: dict[tuple[int, str], int] = {}
+            for subtopic in payload.subtopics:
+                parent_topic_id = topic_id_by_name.get(subtopic.parent_topic)
+                if parent_topic_id is None:
                     raise ValueError(
-                        "assignment references subtopic not in "
-                        f"payload.subtopics under topic {assignment.topic_name!r}: "
-                        f"{assignment.subtopic_name}"
+                        "subtopic references topic not in payload.topics: "
+                        f"{subtopic.parent_topic}"
                     )
                 cursor.execute(
                     """
-                    INSERT INTO video_subtopics(
-                        video_id, subtopic_id, assignment_source,
+                    INSERT INTO subtopics(topic_id, name) VALUES (?, ?)
+                    ON CONFLICT(topic_id, name) DO UPDATE SET name = excluded.name
+                    """,
+                    (parent_topic_id, subtopic.name),
+                )
+                row = cursor.execute(
+                    "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+                    (parent_topic_id, subtopic.name),
+                ).fetchone()
+                subtopic_id_by_pair[(parent_topic_id, subtopic.name)] = row["id"]
+
+            for assignment in payload.assignments:
+                video_id = video_id_by_yt.get(assignment.youtube_video_id)
+                if video_id is None:
+                    raise ValueError(
+                        f"unknown video in discovery payload: {assignment.youtube_video_id}"
+                    )
+                topic_id = topic_id_by_name.get(assignment.topic_name)
+                if topic_id is None:
+                    raise ValueError(
+                        f"assignment references topic not in payload.topics: {assignment.topic_name}"
+                    )
+                cursor.execute(
+                    """
+                    INSERT INTO video_topics(
+                        video_id, topic_id, assignment_type, assignment_source,
                         confidence, reason, discovery_run_id
-                    ) VALUES (?, ?, 'auto', ?, ?, ?)
-                    ON CONFLICT(video_id, subtopic_id) DO UPDATE SET
+                    ) VALUES (?, ?, 'secondary', 'auto', ?, ?, ?)
+                    ON CONFLICT(video_id, topic_id) DO UPDATE SET
                         assignment_source = excluded.assignment_source,
                         confidence = excluded.confidence,
                         reason = excluded.reason,
@@ -739,14 +714,71 @@ def run_discovery(
                     """,
                     (
                         video_id,
-                        subtopic_id,
+                        topic_id,
                         assignment.confidence,
                         assignment.reason,
                         run_id,
                     ),
                 )
 
-        _suppress_wrong_assignments_in_run(connection, channel_id, run_id)
+                if assignment.subtopic_name:
+                    subtopic_id = subtopic_id_by_pair.get(
+                        (topic_id, assignment.subtopic_name)
+                    )
+                    if subtopic_id is None:
+                        raise ValueError(
+                            "assignment references subtopic not in "
+                            f"payload.subtopics under topic {assignment.topic_name!r}: "
+                            f"{assignment.subtopic_name}"
+                        )
+                    cursor.execute(
+                        """
+                        INSERT INTO video_subtopics(
+                            video_id, subtopic_id, assignment_source,
+                            confidence, reason, discovery_run_id
+                        ) VALUES (?, ?, 'auto', ?, ?, ?)
+                        ON CONFLICT(video_id, subtopic_id) DO UPDATE SET
+                            assignment_source = excluded.assignment_source,
+                            confidence = excluded.confidence,
+                            reason = excluded.reason,
+                            discovery_run_id = excluded.discovery_run_id
+                        """,
+                        (
+                            video_id,
+                            subtopic_id,
+                            assignment.confidence,
+                            assignment.reason,
+                            run_id,
+                        ),
+                    )
 
-        connection.commit()
+            _suppress_wrong_assignments_in_run(connection, channel_id, run_id)
+
+            connection.commit()
+        except Exception as exc:
+            # Validation or persistence failed after the LLM returned a
+            # payload — the API call has already been billed, so capture
+            # the raw payload + error so the user can re-debug instead
+            # of silently losing the response.
+            connection.rollback()
+            err_cursor = connection.cursor()
+            err_cursor.execute(
+                """
+                INSERT INTO discovery_runs(
+                    channel_id, model, prompt_version, status,
+                    error_message, raw_response
+                )
+                VALUES (?, ?, ?, 'error', ?, ?)
+                """,
+                (
+                    channel_id,
+                    model,
+                    prompt_version,
+                    str(exc),
+                    json.dumps(asdict(raw_payload)),
+                ),
+            )
+            connection.commit()
+            raise
+
         return run_id

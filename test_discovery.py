@@ -79,6 +79,8 @@ class DiscoverySchemaTests(unittest.TestCase):
             self.assertIn("model", cols)
             self.assertIn("prompt_version", cols)
             self.assertIn("status", cols)
+            self.assertIn("error_message", cols)
+            self.assertIn("raw_response", cols)
             self.assertIn("created_at", cols)
 
 
@@ -3973,6 +3975,12 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
                 self.assertEqual(runs[0]["model"], "haiku-4-5")
                 self.assertEqual(runs[0]["prompt_version"], DISCOVERY_PROMPT_VERSION)
 
+                err_row = conn.execute(
+                    "SELECT error_message, raw_response FROM discovery_runs"
+                ).fetchone()
+                self.assertEqual(err_row["error_message"], "malformed after retry")
+                self.assertIsNone(err_row["raw_response"])
+
                 topics = conn.execute("SELECT id FROM topics").fetchall()
                 self.assertEqual(topics, [])
 
@@ -4031,6 +4039,84 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
                     (ok_run_id,),
                 ).fetchall()
                 self.assertEqual(len(first_run_assignments), 3)
+
+    def test_validation_failure_persists_errored_run_with_raw_response(self) -> None:
+        """When the LLM returns a payload that fails downstream validation
+        (e.g. an assignment references a subtopic not declared in
+        payload.subtopics — the case that lost ~$0.019 on the 2026-05-08
+        run-1 retry), `run_discovery` must persist an errored
+        `discovery_runs` row carrying the raw payload + error message
+        instead of silently rolling back the whole tx and losing the
+        billed response.
+        """
+        import json
+        from dataclasses import asdict
+
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            DiscoveryAssignment,
+            DiscoveryPayload,
+            DiscoverySubtopic,
+            run_discovery,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            # Bad payload: assignment subtopic_name "Discipline" is not
+            # declared under topic "Brain" in payload.subtopics. Mirrors
+            # the real Haiku failure logged in /tmp/doac-sticky-run1-*.
+            bad_payload = DiscoveryPayload(
+                topics=["Brain"],
+                subtopics=[DiscoverySubtopic(name="Sleep", parent_topic="Brain")],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Brain",
+                        confidence=0.9,
+                        reason="dangling subtopic ref",
+                        subtopic_name="Discipline",
+                    ),
+                ],
+            )
+
+            def bad_llm(_videos):
+                return bad_payload
+
+            with self.assertRaises(ValueError):
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=bad_llm,
+                    model="haiku-4-5",
+                    prompt_version=DISCOVERY_PROMPT_VERSION,
+                )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                runs = conn.execute(
+                    "SELECT id, status, error_message, raw_response "
+                    "FROM discovery_runs"
+                ).fetchall()
+                self.assertEqual(len(runs), 1)
+                self.assertEqual(runs[0]["status"], "error")
+                self.assertIn("Discipline", runs[0]["error_message"])
+
+                stored = json.loads(runs[0]["raw_response"])
+                self.assertEqual(stored, asdict(bad_payload))
+
+                # No partial state survives the rollback.
+                self.assertEqual(
+                    conn.execute("SELECT id FROM topics").fetchall(), []
+                )
+                self.assertEqual(
+                    conn.execute("SELECT id FROM subtopics").fetchall(), []
+                )
+                self.assertEqual(
+                    conn.execute("SELECT video_id FROM video_topics").fetchall(),
+                    [],
+                )
 
 
 class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):

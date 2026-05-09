@@ -27,6 +27,26 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-09 (evening) — Errored-run + raw-response persistence
+
+### Done
+- `discovery_runs` schema: added `error_message TEXT` + `raw_response TEXT` (nullable, both back-compat). Existing DBs migrate via `_ensure_required_columns` on next `ensure_schema` call (`discovery_runs` now in `REQUIRED_TABLE_COLUMNS`).
+- `discovery.py`: wrapped the rename + persist + commit block in try/except. On any `Exception` (including the canonical "assignment references subtopic not in payload.subtopics" `ValueError` that lost ~$0.019 on the 2026-05-08 run-1 retry), `connection.rollback()` discards the pending success-row insert, then a fresh insert writes an `error` row with `error_message=str(exc)` + `raw_response=json.dumps(asdict(payload_returned_from_llm))`. Re-raises after persist.
+- LLM-raise path also gets `error_message` populated now (previously: status only). `raw_response` stays NULL there — the LLM raised before returning a payload.
+- Tests: schema test asserts the two new columns; `test_llm_error_marks_run_errored_and_persists_no_partial_state` extended to assert `error_message="malformed after retry"` + `raw_response IS NULL`; new `test_validation_failure_persists_errored_run_with_raw_response` covers the validation path with a dangling-subtopic-ref `DiscoveryPayload` and asserts `raw_response` round-trips via `json.loads(...) == asdict(bad_payload)`. Verify gate green at 219 (+1).
+
+### Decisions
+- Wrapped the entire validation+persistence block (not just individual validation `raise`s) so transient SQLite errors during persistence also benefit from raw-response capture. Cost: one extra `INSERT INTO discovery_runs` on the failure path. Negligible.
+- Saved the **post-LLM, pre-rename** payload as `raw_response`. The renamed payload is what gets persisted on success, but the unmunged LLM output is what's most useful for debugging.
+- Did **not** widen the validator to drop dangling subtopic refs (the second sub-bullet from the original follow-up). Persisting the raw payload makes the failure recoverable without needing the validator to be more permissive.
+
+### Next
+- #2 `cost_estimate_usd` pricing table (still pending — needs Haiku 4.5 input/output rates from user).
+- #6 UI clunkiness triage to `.scratch/ui-clunk/`.
+- #7 fuzzy-match fallback for sticky-curation, #8 Phase B/C scoping, mirrored-networking switch (kills the session — do at boundary).
+
+---
+
 ## 2026-05-09 (pm) — Cleanup commits + tokens_in/out wiring
 
 ### Done

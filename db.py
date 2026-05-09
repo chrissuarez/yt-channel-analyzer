@@ -343,6 +343,8 @@ SCHEMA_STATEMENTS = [
         model TEXT NOT NULL,
         prompt_version TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'success',
+        error_message TEXT,
+        raw_response TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
         CHECK (status IN ('success', 'error'))
@@ -573,6 +575,16 @@ REQUIRED_TABLE_COLUMNS = {
         "topic_id": "INTEGER NOT NULL",
         "old_name": "TEXT NOT NULL",
         "new_name": "TEXT NOT NULL",
+        "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "discovery_runs": {
+        "id": "INTEGER PRIMARY KEY",
+        "channel_id": "INTEGER NOT NULL",
+        "model": "TEXT NOT NULL",
+        "prompt_version": "TEXT NOT NULL",
+        "status": "TEXT NOT NULL DEFAULT 'success'",
+        "error_message": "TEXT",
+        "raw_response": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
 }
