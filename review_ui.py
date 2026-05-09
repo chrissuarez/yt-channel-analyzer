@@ -1490,6 +1490,503 @@ HTML_PAGE = """<!doctype html>
       padding: 6px 10px;
       width: max-content;
     }
+
+    /* ---------- Stage routing ---------- */
+    .stage-panel[hidden] { display: none !important; }
+    .step { cursor: pointer; }
+    .step:disabled { cursor: default; }
+    .step:not(:disabled):hover .label { color: var(--ink); }
+
+    /* ---------- Supply stage ---------- */
+    .supply-wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 48px 48px 96px;
+    }
+    .channel-header {
+      display: flex;
+      gap: 24px;
+      align-items: flex-start;
+      margin-bottom: 48px;
+    }
+    .channel-header .ch-avatar {
+      width: 88px;
+      height: 88px;
+      border-radius: 999px;
+      background: var(--teal);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 36px;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .channel-header .ch-body {
+      flex: 1;
+      padding-top: 6px;
+    }
+    .channel-header .ch-body h1 {
+      margin: 4px 0 6px;
+      font-family: var(--display);
+      font-size: 40px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.1;
+    }
+    .channel-header .ch-description {
+      color: var(--ink-soft);
+      font-size: 15px;
+      max-width: 620px;
+      margin: 0;
+    }
+    .channel-header .ch-meta {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      flex-wrap: wrap;
+    }
+    .channel-header .ch-meta span.sep { color: var(--ink-mute); }
+    .channel-header .ch-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .channel-header .ch-hint {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-mute);
+      margin-top: 4px;
+    }
+
+    .supply-toolbar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .supply-h2 {
+      font-family: var(--display);
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      margin: 4px 0 0;
+    }
+    .supply-toolbar-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .supply-toolbar-actions .sort-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-right: 6px;
+    }
+    .supply-toolbar-actions button {
+      font-family: var(--body);
+      font-size: 13px;
+      padding: 6px 12px;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      background: var(--paper);
+      color: var(--ink-soft);
+      cursor: pointer;
+    }
+    .supply-toolbar-actions button.active {
+      background: var(--ink);
+      color: #fff;
+      border-color: var(--ink);
+    }
+
+    .supply-video-list { margin-top: 18px; }
+    .supply-row {
+      display: grid;
+      grid-template-columns: 176px 1fr 200px;
+      gap: 24px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--rule);
+      align-items: flex-start;
+    }
+    .supply-row .sv-thumb {
+      width: 160px;
+      height: 90px;
+      background: var(--tag-bg) repeating-linear-gradient(
+        135deg,
+        rgba(0,0,0,0.04) 0, rgba(0,0,0,0.04) 1px,
+        transparent 1px, transparent 6px);
+      border-radius: 4px;
+      background-size: cover;
+      background-position: center;
+    }
+    .supply-row .sv-title {
+      font-family: var(--body);
+      font-weight: 500;
+      font-size: 17px;
+      line-height: 1.4;
+      letter-spacing: -0.005em;
+      max-width: 62ch;
+      margin: 2px 0 0;
+      color: var(--ink);
+    }
+    .supply-row .sv-meta {
+      margin-top: 8px;
+      display: flex;
+      gap: 14px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      flex-wrap: wrap;
+    }
+    .supply-row .sv-meta .sep { color: var(--ink-mute); }
+    .supply-row .sv-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+      padding-top: 4px;
+    }
+    .supply-row .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .supply-row .pill .pill-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      display: inline-block;
+    }
+    .supply-row .pill-good { background: var(--teal-tint); color: var(--teal); }
+    .supply-row .pill-good .pill-dot { background: var(--teal); }
+    .supply-row .pill-bad { background: var(--coral-tint); color: var(--coral); }
+    .supply-row .pill-bad .pill-dot { background: var(--coral); }
+    .supply-row .pill-neutral { background: var(--tag-bg); color: var(--ink-soft); }
+    .supply-row .pill-neutral .pill-dot { background: var(--ink-soft); }
+    .supply-row .sv-hint {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-mute);
+    }
+
+    .supply-video-footer {
+      margin-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+    }
+
+    /* ---------- Discover stage ---------- */
+    .discover-h1 {
+      font-family: var(--display);
+      font-size: 40px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.1;
+      margin: 4px 0 18px;
+    }
+    .discover-lede {
+      color: var(--ink-soft);
+      font-size: 16px;
+      max-width: 62ch;
+      margin: 0 0 36px;
+    }
+    .discover-run-panel {
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      background: var(--surface, var(--panel));
+      padding: 24px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 24px;
+      align-items: center;
+    }
+    .discover-run-panel h3 {
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 22px;
+      margin: 0;
+      display: inline-block;
+    }
+    .discover-run-headline {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .discover-run-meta {
+      margin-top: 16px;
+      display: flex;
+      gap: 24px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      flex-wrap: wrap;
+    }
+    .discover-run-meta strong {
+      color: var(--ink);
+      font-weight: 500;
+    }
+    .discover-mode-toggle {
+      margin-top: 18px;
+      display: inline-flex;
+      border: 1px solid var(--rule);
+      border-radius: 999px;
+      padding: 3px;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+    .discover-mode-toggle .opt {
+      padding: 5px 14px;
+      border-radius: 999px;
+      color: var(--ink-soft);
+    }
+    .discover-mode-toggle .opt.on {
+      background: var(--ink);
+      color: var(--paper);
+    }
+    .discover-run-action {
+      padding: 14px 22px;
+      font-size: 15px;
+      font-family: var(--body);
+      font-weight: 500;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: var(--paper);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .pill-warn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(216, 90, 48, 0.12);
+      color: var(--coral);
+    }
+
+    .discover-history { margin-top: 64px; }
+    .discover-history-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .discover-history-head h2 {
+      font-family: var(--display);
+      font-size: 28px;
+      font-weight: 500;
+      margin: 0;
+    }
+    .discover-run-row {
+      display: grid;
+      grid-template-columns: 70px 1.4fr 1fr 0.8fr 0.9fr 28px;
+      gap: 18px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--rule);
+      align-items: flex-start;
+    }
+    .discover-run-row .dr-num {
+      font-family: var(--display);
+      font-size: 26px;
+      font-weight: 500;
+      color: var(--ink);
+    }
+    .discover-run-row .dr-model {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+    }
+    .discover-run-row .dr-prompt {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+    }
+    .discover-run-row .dr-error {
+      margin-top: 6px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--coral);
+    }
+    .discover-run-row .dr-when,
+    .discover-run-row .dr-counts {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      padding-top: 4px;
+    }
+    .discover-run-row .dr-status {
+      padding-top: 2px;
+    }
+    .discover-run-row .dr-chevron {
+      color: var(--ink-mute);
+      font-size: 16px;
+      padding-top: 4px;
+    }
+
+    /* ---------- Consume stage ---------- */
+    .consume-wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 48px 48px 96px;
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 56px;
+      align-items: start;
+    }
+    .consume-filters .consume-filter-group {
+      margin-top: 24px;
+    }
+    .consume-filters .consume-filter-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-soft);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    .consume-filters .consume-topic-filters {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .consume-filters .consume-topic-filters label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--ink-soft);
+      gap: 8px;
+    }
+    .consume-filters .consume-topic-filters label .swatch {
+      width: 12px;
+      height: 12px;
+      border: 1px solid var(--rule);
+      border-radius: 2px;
+      display: inline-block;
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+    .consume-filters .consume-topic-filters label .name {
+      flex: 1;
+      display: flex;
+      gap: 8px;
+    }
+    .consume-filters .consume-topic-filters label .count {
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+    .consume-filters .consume-filter-empty {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 13px;
+      color: var(--ink-mute);
+    }
+    .consume-h1 {
+      font-family: var(--display);
+      font-size: 40px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      line-height: 1.1;
+      margin: 4px 0 14px;
+    }
+    .consume-lede {
+      color: var(--ink-soft);
+      font-size: 16px;
+      max-width: 60ch;
+      margin: 0 0 40px;
+    }
+    .consume-empty {
+      border: 1px dashed var(--rule);
+      border-radius: 6px;
+      padding: 56px 32px;
+      text-align: center;
+    }
+    .consume-empty .consume-empty-mark {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      background: var(--tag-bg);
+      margin: 0 auto 18px;
+    }
+    .consume-empty h3 {
+      font-family: var(--display);
+      font-size: 22px;
+      font-weight: 500;
+      margin: 0 0 10px;
+    }
+    .consume-empty p {
+      color: var(--ink-soft);
+      max-width: 44ch;
+      margin: 0 auto;
+    }
+
+    .consume-sketch-wrap { margin-top: 56px; }
+    .consume-sketch {
+      border: 1px solid var(--rule);
+      background: var(--surface, var(--panel));
+      border-radius: 6px;
+      padding: 32px 36px;
+      margin-top: 14px;
+      position: relative;
+    }
+    .consume-sketch-tag {
+      position: absolute;
+      top: 14px;
+      right: 18px;
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+    }
+    .consume-sketch-quote {
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 22px;
+      line-height: 1.45;
+      max-width: 56ch;
+      color: var(--ink);
+      margin: 0;
+    }
+    .consume-sketch-foot {
+      margin-top: 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+    .consume-sketch-speaker {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+    }
+    .consume-sketch-source {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -1510,37 +2007,37 @@ HTML_PAGE = """<!doctype html>
   </header>
 
   <nav class="stepper" aria-label="Pipeline stages">
-    <button class="step done" type="button" disabled>
+    <button class="step" type="button" data-stage="supply">
       <span class="marker" aria-hidden="true"></span>
       <span class="step-text">
         <span class="label">Supply</span>
         <span class="sub" id="step-supply-sub">videos &amp; transcripts</span>
       </span>
     </button>
-    <button class="step done" type="button" disabled>
+    <button class="step" type="button" data-stage="discover">
       <span class="marker" aria-hidden="true"></span>
       <span class="step-text">
         <span class="label">Discover</span>
         <span class="sub" id="step-discover-sub">topic discovery runs</span>
       </span>
     </button>
-    <button class="step act" type="button" disabled>
+    <button class="step" type="button" data-stage="review">
       <span class="marker" aria-hidden="true"></span>
       <span class="step-text">
         <span class="label">Review</span>
         <span class="sub" id="step-review-sub">curate the topic map</span>
       </span>
     </button>
-    <button class="step idle" type="button" disabled>
+    <button class="step" type="button" data-stage="consume">
       <span class="marker" aria-hidden="true"></span>
       <span class="step-text">
         <span class="label">Consume</span>
-        <span class="sub">Phase C — not yet wired</span>
+        <span class="sub">Phase C — sketch only</span>
       </span>
     </button>
   </nav>
 
-  <main class="stage-inner">
+  <main class="stage-inner stage-panel" data-stage="review" id="stage-review">
   <div class="wrap">
     <section class="review-toolbar">
       <div>
@@ -1685,14 +2182,157 @@ HTML_PAGE = """<!doctype html>
   </div>
   </main>
 
+  <main class="stage-inner stage-panel" data-stage="supply" id="stage-supply" hidden>
+    <div class="supply-wrap">
+      <section class="channel-header" id="supply-channel-header"></section>
+
+      <section class="supply-toolbar">
+        <div>
+          <div class="eyebrow">Supply · stage 1 of 4</div>
+          <h2 class="supply-h2">Videos</h2>
+        </div>
+        <div class="supply-toolbar-actions">
+          <span class="sort-label">Sort</span>
+          <button id="supply-sort-newest" class="active">Newest first ↓</button>
+          <button id="supply-sort-oldest" class="secondary">Oldest first ↑</button>
+        </div>
+      </section>
+
+      <div id="supply-video-list" class="supply-video-list"></div>
+      <div id="supply-video-footer" class="supply-video-footer"></div>
+    </div>
+  </main>
+
+  <main class="stage-inner stage-panel" data-stage="discover" id="stage-discover" hidden>
+    <div class="wrap">
+      <div class="eyebrow">Discover · stage 2 of 4</div>
+      <h1 class="discover-h1">Topic discovery</h1>
+      <p class="discover-lede">
+        Ask a model to read every transcript and propose a topology of topics
+        and subtopics for the channel. Runs are cheap and re-runnable; your
+        curation in Review persists across them.
+      </p>
+
+      <section id="discover-run-panel" class="discover-run-panel"></section>
+
+      <section class="discover-history">
+        <div class="discover-history-head">
+          <h2>Run history</h2>
+          <span id="discover-history-summary" class="mono small soft"></span>
+        </div>
+        <div id="discover-run-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <main class="stage-inner stage-panel" data-stage="consume" id="stage-consume" hidden>
+    <div class="consume-wrap">
+      <aside class="consume-filters">
+        <div class="eyebrow">Filter</div>
+        <div class="consume-filter-group">
+          <div class="consume-filter-label">By topic</div>
+          <div id="consume-topic-filters" class="consume-topic-filters"></div>
+        </div>
+        <div class="consume-filter-group">
+          <div class="consume-filter-label">By speaker</div>
+          <div class="consume-filter-empty">Available once guest extraction lands.</div>
+        </div>
+        <div class="consume-filter-group">
+          <div class="consume-filter-label">By claim type</div>
+          <div class="consume-filter-empty">Available once Phase C ships.</div>
+        </div>
+      </aside>
+
+      <section class="consume-main">
+        <div class="eyebrow">Consume · stage 4 of 4</div>
+        <h1 class="consume-h1">Claims</h1>
+        <p class="consume-lede">
+          Specific assertions the model has lifted from transcripts, with a
+          quotation, the source video, and a timestamp. Click <em>watch source</em>
+          to open the moment in YouTube.
+        </p>
+
+        <div class="consume-empty">
+          <div class="consume-empty-mark"></div>
+          <h3>No claims yet</h3>
+          <p>
+            Claim extraction runs after Review is caught up. The Phase C
+            pipeline isn't wired in this build — when it ships, claims will
+            appear here grouped by the topics you've curated.
+          </p>
+        </div>
+
+        <div class="consume-sketch-wrap">
+          <div class="eyebrow">Preview · single claim card</div>
+          <div class="consume-sketch">
+            <span class="consume-sketch-tag">not yet — sketch</span>
+            <p class="consume-sketch-quote">
+              "The cost of decarbonization is not in the energy itself — it's
+              in the rate at which a society can rebuild its infrastructure.
+              Every previous transition took fifty to seventy years."
+            </p>
+            <div class="consume-sketch-foot">
+              <div>
+                <div class="consume-sketch-speaker">Vaclav Smil</div>
+                <div class="consume-sketch-source">
+                  Climate change is a problem of governance, not technology — 2026-04-15 · 41:08
+                </div>
+              </div>
+              <button class="btn" disabled>▶ Watch source</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
   <script>
+    const STAGE_ORDER = ['supply', 'discover', 'review', 'consume'];
+
     const state = {
       payload: null,
       activeTopicName: null,
       focusedTopic: null,
       activeSubtopic: null,
       overviewSort: 'episodes',
+      activeStage: 'review',
+      supplySort: 'newest',
     };
+
+    function setActiveStage(stage) {
+      if (!STAGE_ORDER.includes(stage)) return;
+      state.activeStage = stage;
+      STAGE_ORDER.forEach((s) => {
+        const panel = document.getElementById('stage-' + s);
+        if (panel) panel.hidden = (s !== stage);
+      });
+      renderStepper();
+    }
+
+    function renderStepper() {
+      const activeIdx = STAGE_ORDER.indexOf(state.activeStage);
+      document.querySelectorAll('.stepper .step').forEach((btn) => {
+        const stage = btn.getAttribute('data-stage');
+        const idx = STAGE_ORDER.indexOf(stage);
+        btn.classList.remove('done', 'act', 'idle');
+        if (idx < activeIdx) btn.classList.add('done');
+        else if (idx === activeIdx) btn.classList.add('act');
+        else btn.classList.add('idle');
+      });
+    }
+
+    function setSupplySort(mode) {
+      state.supplySort = mode === 'oldest' ? 'oldest' : 'newest';
+      const newestBtn = document.getElementById('supply-sort-newest');
+      const oldestBtn = document.getElementById('supply-sort-oldest');
+      if (newestBtn && oldestBtn) {
+        newestBtn.classList.toggle('active', state.supplySort === 'newest');
+        newestBtn.classList.toggle('secondary', state.supplySort !== 'newest');
+        oldestBtn.classList.toggle('active', state.supplySort === 'oldest');
+        oldestBtn.classList.toggle('secondary', state.supplySort !== 'oldest');
+      }
+      renderSupply(state.payload);
+    }
 
     function focusTopic(name) {
       state.focusedTopic = name || null;
@@ -2763,6 +3403,237 @@ HTML_PAGE = """<!doctype html>
       `).join('');
     }
 
+    function formatDate(value) {
+      if (!value) return '—';
+      const s = String(value);
+      // Trim time portion if SQLite "YYYY-MM-DD HH:MM:SS" — keep date only.
+      const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+      return m ? m[1] : s;
+    }
+
+    function formatDateTime(value) {
+      if (!value) return '—';
+      return String(value).replace('T', ' ').slice(0, 16);
+    }
+
+    function channelInitial(title) {
+      const t = String(title || '').trim();
+      if (!t) return '·';
+      return t.slice(0, 1).toUpperCase();
+    }
+
+    function renderChannelHeader(supply) {
+      const host = document.getElementById('supply-channel-header');
+      if (!host) return;
+      if (!supply) {
+        host.innerHTML = '<p class="muted">No primary channel — initialize one first.</p>';
+        return;
+      }
+      const newSinceRun = state.payload?.channel_overview?.latest_discovery
+        ? null
+        : null;
+      const meta = [];
+      if (supply.handle) meta.push(escapeHtml(supply.handle));
+      if (supply.last_refreshed_at) meta.push('Ingested ' + escapeHtml(formatDateTime(supply.last_refreshed_at)));
+      const metaJoined = meta.length
+        ? meta.map((m, i) => (i ? '<span class="sep">·</span>' : '') + '<span>' + m + '</span>').join('')
+        : '<span class="sep">No ingestion timestamp recorded</span>';
+      const desc = supply.description
+        ? '<p class="ch-description">' + escapeHtml(supply.description) + '</p>'
+        : '';
+      host.innerHTML = `
+        <div class="ch-avatar">${escapeHtml(channelInitial(supply.title))}</div>
+        <div class="ch-body">
+          <div class="eyebrow">Channel</div>
+          <h1>${escapeHtml(supply.title || 'Unknown channel')}</h1>
+          ${desc}
+          <div class="ch-meta">${metaJoined}</div>
+        </div>
+        <div class="ch-actions">
+          <button class="primary-action" id="supply-reingest-btn">Re-ingest</button>
+          <button class="secondary" id="supply-edit-btn">Edit channel</button>
+        </div>
+      `;
+      const reingest = document.getElementById('supply-reingest-btn');
+      if (reingest) reingest.addEventListener('click', () => setStatus('Re-ingest is CLI-only for now — run: yt-channel-analyzer ingest <project>', true));
+      const edit = document.getElementById('supply-edit-btn');
+      if (edit) edit.addEventListener('click', () => setStatus('Channel editing is CLI-only for now — edit the channels row and re-render.', true));
+    }
+
+    function transcriptPill(status) {
+      if (status === 'available') {
+        return '<span class="pill pill-good"><span class="pill-dot"></span>transcript ready</span>';
+      }
+      if (status === 'disabled' || status === 'unavailable' || status === 'not_found') {
+        return '<span class="pill pill-bad"><span class="pill-dot"></span>no transcript</span>';
+      }
+      if (!status) {
+        return '<span class="pill pill-neutral"><span class="pill-dot"></span>not fetched</span>';
+      }
+      return '<span class="pill pill-neutral"><span class="pill-dot"></span>' + escapeHtml(status) + '</span>';
+    }
+
+    function transcriptHint(video) {
+      if (video.transcript_status === 'available' && video.transcript_fetched_at) {
+        return 'fetched ' + escapeHtml(formatDate(video.transcript_fetched_at));
+      }
+      if (video.transcript_status === 'disabled') return 'captions disabled';
+      if (video.transcript_status === 'not_found') return 'no captions found';
+      if (!video.transcript_status) return 'not yet attempted';
+      return escapeHtml(video.transcript_status);
+    }
+
+    function renderSupply(payload) {
+      if (!payload) return;
+      renderChannelHeader(payload.supply_channel);
+      const list = document.getElementById('supply-video-list');
+      const footer = document.getElementById('supply-video-footer');
+      if (!list || !footer) return;
+
+      const videos = (payload.supply_videos || []).slice();
+      if (state.supplySort === 'oldest') videos.reverse();
+
+      if (!videos.length) {
+        list.innerHTML = '<p class="muted" style="padding:24px 0;">No videos yet — re-ingest from the CLI to fetch.</p>';
+        footer.innerHTML = '';
+        return;
+      }
+
+      list.innerHTML = videos.map((v) => {
+        const thumb = v.thumbnail_url
+          ? `style="background-image:url('${escapeHtml(v.thumbnail_url)}');"`
+          : '';
+        const meta = [
+          formatDate(v.published_at),
+          'YT-' + escapeHtml(v.youtube_video_id || ''),
+        ];
+        const metaHtml = meta.map((m, i) =>
+          (i ? '<span class="sep">·</span>' : '') + '<span>' + escapeHtml(m) + '</span>'
+        ).join('');
+        const watchUrl = v.youtube_video_id
+          ? `https://www.youtube.com/watch?v=${encodeURIComponent(v.youtube_video_id)}`
+          : null;
+        const titleHtml = watchUrl
+          ? `<a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener" class="sv-title-link">${escapeHtml(v.title)}</a>`
+          : escapeHtml(v.title);
+        return `
+          <div class="supply-row">
+            <div class="sv-thumb" ${thumb}></div>
+            <div>
+              <p class="sv-title">${titleHtml}</p>
+              <div class="sv-meta">${metaHtml}</div>
+            </div>
+            <div class="sv-actions">
+              ${transcriptPill(v.transcript_status)}
+              <span class="sv-hint">${transcriptHint(v)}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      const totalShown = videos.length;
+      const totalAll = payload.channel_overview?.video_count ?? totalShown;
+      const more = totalAll > totalShown
+        ? `<span>Showing ${totalShown} of ${totalAll} videos</span><span class="sep">extend the limit in <code>_build_supply_videos</code> to load more</span>`
+        : `<span>Showing all ${totalShown} ${totalShown === 1 ? 'video' : 'videos'}</span>`;
+      footer.innerHTML = more;
+    }
+
+    function renderDiscoverRunPanel(payload) {
+      const host = document.getElementById('discover-run-panel');
+      if (!host) return;
+      const overview = payload.channel_overview || {};
+      const latest = overview.latest_discovery;
+      const videoCount = overview.video_count ?? 0;
+      const model = latest?.model || 'claude-haiku-4-5-20251001';
+      const promptVersion = latest?.prompt_version || '—';
+      const warnPill = videoCount > 0 && !latest
+        ? `<span class="pill-warn">${videoCount} videos · no discovery run yet</span>`
+        : '';
+      host.innerHTML = `
+        <div>
+          <div class="discover-run-headline">
+            <h3>Run discovery</h3>
+            ${warnPill}
+          </div>
+          <div class="discover-run-meta">
+            <span>Model <strong>${escapeHtml(model)}</strong></span>
+            <span>Prompt <strong>${escapeHtml(promptVersion)}</strong></span>
+            <span>Estimate <strong>$0.019 ± 0.005</strong></span>
+            <span>~17s</span>
+          </div>
+          <div class="discover-mode-toggle" role="tablist" aria-label="Discovery mode">
+            <span class="opt on">--real</span>
+            <span class="opt">--stub</span>
+          </div>
+        </div>
+        <button class="discover-run-action" id="discover-run-btn">Run discovery →</button>
+      `;
+      const btn = document.getElementById('discover-run-btn');
+      if (btn) btn.addEventListener('click', () => setStatus(
+        'Discovery runs are CLI-only — run: yt-channel-analyzer discover <project> --real (requires RALPH_ALLOW_REAL_LLM=1)', true
+      ));
+    }
+
+    function renderDiscoverHistory(payload) {
+      const list = document.getElementById('discover-run-list');
+      const summary = document.getElementById('discover-history-summary');
+      if (!list || !summary) return;
+      const runs = payload.discover_runs || [];
+      if (!runs.length) {
+        list.innerHTML = '<p class="muted" style="padding:24px 0;">No discovery runs yet — run one from the CLI.</p>';
+        summary.textContent = '';
+        return;
+      }
+      const successCount = runs.filter((r) => r.status === 'success').length;
+      const errorCount = runs.filter((r) => r.status === 'error').length;
+      summary.textContent = `${successCount} successful${errorCount ? ' · ' + errorCount + ' errored' : ''}`;
+      list.innerHTML = runs.map((r) => {
+        const statusPill = r.status === 'success'
+          ? '<span class="pill pill-good"><span class="pill-dot"></span>success</span>'
+          : '<span class="pill pill-bad"><span class="pill-dot"></span>errored</span>';
+        const errLine = r.error_message
+          ? `<div class="dr-error">${escapeHtml(r.error_message).slice(0, 120)}</div>`
+          : '';
+        return `
+          <div class="discover-run-row">
+            <span class="dr-num">#${r.id}</span>
+            <div>
+              <div><span class="dr-model">${escapeHtml(r.model)}</span> <span class="dr-prompt">· prompt ${escapeHtml(r.prompt_version)}</span></div>
+              ${errLine}
+            </div>
+            <span class="dr-when">${escapeHtml(formatDateTime(r.created_at))}</span>
+            <span class="dr-status">${statusPill}</span>
+            <span class="dr-counts">${r.topic_count} topics · ${r.episode_count} eps</span>
+            <span class="dr-chevron">›</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function renderDiscover(payload) {
+      if (!payload) return;
+      renderDiscoverRunPanel(payload);
+      renderDiscoverHistory(payload);
+    }
+
+    function renderConsume(payload) {
+      const host = document.getElementById('consume-topic-filters');
+      if (!host) return;
+      const map = payload?.discovery_topic_map;
+      const topics = (map?.topics || []).slice(0, 8);
+      if (!topics.length) {
+        host.innerHTML = '<div class="consume-filter-empty">No topics yet — run discovery first.</div>';
+        return;
+      }
+      host.innerHTML = topics.map((t) => `
+        <label>
+          <span class="name"><span class="swatch"></span>${escapeHtml(t.name)}</span>
+          <span class="count">${t.episode_count ?? 0}</span>
+        </label>
+      `).join('');
+    }
+
     function render() {
       const payload = state.payload;
       renderSelect('run-select', payload.runs, payload.run_id, (item) => item.id, (item) => `run ${item.id} · ${item.scope_label} · topics ${item.pending_label_count} pending · subtopics ${item.subtopic_pending_label_count || 0} pending · comparison groups ${item.comparison_pending_label_count || 0} pending`);
@@ -2782,6 +3653,10 @@ HTML_PAGE = """<!doctype html>
       renderApprovedSubtopics(payload.subtopic_reviews.approved);
       renderComparisonCards(payload.comparison_reviews.pending, payload.comparison_reviews.approved_groups);
       renderApprovedComparisonGroups(payload.comparison_reviews.approved_groups);
+      renderSupply(payload);
+      renderDiscover(payload);
+      renderConsume(payload);
+      renderStepper();
     }
 
     async function postJson(path, body) {
@@ -2980,6 +3855,15 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('refresh-btn').addEventListener('click', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('overview-sort-eps').addEventListener('click', () => setOverviewSort('episodes'));
     document.getElementById('overview-sort-az').addEventListener('click', () => setOverviewSort('az'));
+    document.querySelectorAll('.stepper .step').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const stage = btn.getAttribute('data-stage');
+        if (stage) setActiveStage(stage);
+      });
+    });
+    document.getElementById('supply-sort-newest').addEventListener('click', () => setSupplySort('newest'));
+    document.getElementById('supply-sort-oldest').addEventListener('click', () => setSupplySort('oldest'));
+    setActiveStage(state.activeStage);
     document.getElementById('run-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('topic-select').addEventListener('change', () => {
       const newTopic = selectedTopicName();
@@ -3433,6 +4317,106 @@ def _build_channel_overview(
     }
 
 
+def _build_supply_channel(
+    db_path: Path, channel_id: int
+) -> dict[str, Any] | None:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            """
+            SELECT youtube_channel_id, title, handle, description,
+                   thumbnail_url, last_refreshed_at, created_at
+            FROM channels
+            WHERE id = ?
+            """,
+            (channel_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "youtube_channel_id": row["youtube_channel_id"],
+        "title": row["title"],
+        "handle": row["handle"],
+        "description": row["description"],
+        "thumbnail_url": row["thumbnail_url"],
+        "last_refreshed_at": row["last_refreshed_at"],
+        "created_at": row["created_at"],
+    }
+
+
+def _build_supply_videos(
+    db_path: Path, channel_id: int, *, limit: int = 50
+) -> list[dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT v.id, v.youtube_video_id, v.title, v.published_at,
+                   v.thumbnail_url, t.transcript_status, t.fetched_at
+            FROM videos v
+            LEFT JOIN video_transcripts t ON t.video_id = v.id
+            WHERE v.channel_id = ?
+            ORDER BY COALESCE(v.published_at, v.created_at) DESC
+            LIMIT ?
+            """,
+            (channel_id, limit),
+        ).fetchall()
+    return [
+        {
+            "id": int(row["id"]),
+            "youtube_video_id": row["youtube_video_id"],
+            "title": row["title"],
+            "published_at": row["published_at"],
+            "thumbnail_url": row["thumbnail_url"],
+            "transcript_status": row["transcript_status"],
+            "transcript_fetched_at": row["fetched_at"],
+        }
+        for row in rows
+    ]
+
+
+def _build_discover_runs(
+    db_path: Path, channel_id: int, *, limit: int = 25
+) -> list[dict[str, Any]]:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT id, model, prompt_version, status, error_message, created_at
+            FROM discovery_runs
+            WHERE channel_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (channel_id, limit),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            run_id = int(row["id"])
+            counts = connection.execute(
+                """
+                SELECT COUNT(DISTINCT topic_id) AS topic_count,
+                       COUNT(DISTINCT video_id) AS episode_count
+                FROM video_topics
+                WHERE discovery_run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            out.append(
+                {
+                    "id": run_id,
+                    "model": row["model"],
+                    "prompt_version": row["prompt_version"],
+                    "status": row["status"],
+                    "error_message": row["error_message"],
+                    "created_at": row["created_at"],
+                    "topic_count": int(counts["topic_count"] or 0),
+                    "episode_count": int(counts["episode_count"] or 0),
+                }
+            )
+        return out
+
+
 def _topics_introduced_in_run(
     connection: sqlite3.Connection, channel_id: int, run_id: int
 ) -> list[str]:
@@ -3819,11 +4803,23 @@ def build_state_payload(
     latest_subtopic_run_id_by_topic = _latest_subtopic_run_ids_by_topic(db_path)
     if primary_channel is None:
         channel_overview = None
+        supply_channel: dict[str, Any] | None = None
+        supply_videos: list[dict[str, Any]] = []
+        discover_runs: list[dict[str, Any]] = []
     else:
         channel_overview = _build_channel_overview(
             db_path,
             project_id=primary_channel.project_id,
             channel_id=primary_channel.channel_id,
+        )
+        supply_channel = _build_supply_channel(
+            db_path, channel_id=primary_channel.channel_id
+        )
+        supply_videos = _build_supply_videos(
+            db_path, channel_id=primary_channel.channel_id
+        )
+        discover_runs = _build_discover_runs(
+            db_path, channel_id=primary_channel.channel_id
         )
 
     return {
@@ -3840,6 +4836,9 @@ def build_state_payload(
         "topic_inventory": topic_inventory,
         "discovery_topic_map": discovery_topic_map,
         "channel_overview": channel_overview,
+        "supply_channel": supply_channel,
+        "supply_videos": supply_videos,
+        "discover_runs": discover_runs,
         "latest_subtopic_run_id_by_topic": latest_subtopic_run_id_by_topic,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),

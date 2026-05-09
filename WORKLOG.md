@@ -27,6 +27,20 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-10 — Stage pages: Supply / Discover / Consume + stepper as router
+
+Stepper now routes between four `<main class="stage-panel">` blocks via `state.activeStage` and `setActiveStage()`. Stepper buttons no longer `disabled`; `done`/`act`/`idle` derive from index vs activeStage in `renderStepper()`. Stepper line previously cut through labels — fixed by extending line endpoints to marker centers (`left: 22px; right: -22px`) so markers' z-index masks them, plus adding `background: var(--paper)` to `.step-text` so the line is masked behind labels.
+
+**Supply stage**: channel header (88px teal avatar w/ first-letter, 40px serif h1, description, @handle / ingested-at metadata, Re-ingest / Edit channel buttons → CLI-pointer status messages); Videos list w/ Newest/Oldest sort, 160×90 striped placeholder thumbs (real `thumbnail_url` if present), 17px serif titles linking to youtube.com/watch, mono published-date + YT id meta, transcript-status pill (good/bad/neutral) + hint line. Pagination footer uses `channel_overview.video_count`. New payload helpers `_build_supply_channel` + `_build_supply_videos` (default limit 50).
+
+**Discover stage**: lede + run panel (model + prompt-version readout from `latest_discovery`, $0.019±0.005 estimate placeholder, --real/--stub visual toggle, Run discovery button → CLI-pointer status message); run history table from new `_build_discover_runs` helper (id, model, prompt_version, status, error_message, created_at, COUNT(DISTINCT topic_id) + COUNT(DISTINCT video_id) from video_topics). Cost column omitted because `discovery.py` doesn't pass `correlation_id` to llm_calls — flagged as follow-up.
+
+**Consume stage**: two-column. Filter sidebar (live topic list from `discovery_topic_map.topics` w/ episode count, plus "Available once X lands" placeholders for speakers + claim types). Main panel is the design's empty state + a single static sketch claim card with "not yet — sketch" tag.
+
+Verify gate green at 226 throughout. Re-ingest / Edit channel / Run discovery buttons are visual-only on purpose (HITL gating against accidental real-LLM cost). Server restarted on pid 107947, 0.0.0.0:8765, 144KB rendered HTML.
+
+---
+
 ## 2026-05-09 (late) — review_ui.py reskin to Claude Design hand-off
 
 User pasted a Claude Design URL pointing to a `youtube-anaslyser` bundle (Review canvas mocks: overview pillar grid + minimap + focused state) and said "drive existing code with the design… happy to do away with current UI as it's clunky." Reskinned `review_ui.py` end-to-end: design tokens (paper/ink/teal/blue/coral) + Poppins + Source Serif 4 + JetBrains Mono via Google Fonts; new `<header class="topbar">` (wordmark + dot + version + channel pill) and `<nav class="stepper">` (4 stages, Review active); `#review-canvas` toggles between overview (compact pillars w/ chips + dot grid + "X% high-confidence") and focused (240px minimap left + focus-head w/ 44px serif h1 + subtopic tab strip w/ coral underline + episode rows: 152px striped thumbs, 18px serif titles never truncated, italic Source Serif reasons w/ coral left border, also-in pills, action column ▶ Watch / ✗ Wrong topic / ✗ Wrong subtopic). Legacy panels (channel-overview tiles, "Topic Map" broad, Broad Topics / Subtopic / Comparison grid, generator, run-history-advanced) hidden via `display:none !important` so the 37 HTML-coupled tests stay green. New JS: `state.focusedTopic`/`activeSubtopic`/`overviewSort`, `focusTopic()`, `setActiveSubtopic()`, `setOverviewSort()`, `dotGridHtml()`, `highConfidencePct()`, `renderFocusedTopic()`, `renderDiscoveryEpisodeItemFocused()`. Verify gate: 226/226 green. **Working tree dirty — review_ui.py +1519/−494 lines, NOT committed.** Server restarted on 0.0.0.0:8765, user confirmed they can see the new UI. Sort buttons (Episode count ↓ / Topic A–Z) + Discard run + Mark caught up wired only to client-side reorder + status messages — real backend wiring deferred. Supply/Discover/Consume stage pages from the design (mocks-stages.jsx) intentionally out of scope; only Review has a live data path today.
