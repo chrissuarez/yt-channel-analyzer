@@ -1175,11 +1175,6 @@ HTML_PAGE = """<!doctype html>
       flex-wrap: wrap;
       align-items: center;
     }
-    .review-toolbar .toolbar-actions .vrule {
-      width: 1px; height: 24px;
-      background: var(--rule);
-      margin: 0 4px;
-    }
     .review-toolbar .toolbar-actions button.active {
       background: var(--ink);
       color: #fff;
@@ -1553,9 +1548,6 @@ HTML_PAGE = """<!doctype html>
         <span class="sort-label">Sort</span>
         <button id="overview-sort-eps" class="active">Episode count ↓</button>
         <button id="overview-sort-az" class="secondary">Topic A–Z</button>
-        <span class="vrule"></span>
-        <button id="discard-run-btn" class="secondary">Discard run</button>
-        <button id="mark-caught-up-btn" class="primary-action">Mark caught up</button>
       </div>
     </section>
 
@@ -2984,8 +2976,6 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('refresh-btn').addEventListener('click', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('overview-sort-eps').addEventListener('click', () => setOverviewSort('episodes'));
     document.getElementById('overview-sort-az').addEventListener('click', () => setOverviewSort('az'));
-    document.getElementById('discard-run-btn').addEventListener('click', () => setStatus('Discard-run is not yet wired — coming soon.', true));
-    document.getElementById('mark-caught-up-btn').addEventListener('click', () => setStatus('Mark-caught-up is not yet wired — coming soon.', true));
     document.getElementById('run-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('topic-select').addEventListener('change', () => {
       const newTopic = selectedTopicName();
