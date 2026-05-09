@@ -6082,5 +6082,157 @@ class ReingestEndpointTests(unittest.TestCase):
         self.assertIn("channel-overview", UI_REVISION)
 
 
+class DiscoverEndpointTests(unittest.TestCase):
+    """`POST /api/discover` drives `run_discovery` in stub or real mode via
+    an injectable runner. Real mode rides the existing
+    `RALPH_ALLOW_REAL_LLM=1` gate inside `make_real_llm_callable`; missing
+    env surfaces as a 400 with the gate message verbatim."""
+
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def test_discover_stub_mode_creates_discovery_run(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/discover", body={"mode": "stub"}
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["mode"], "stub")
+            self.assertIsInstance(payload["run_id"], int)
+            self.assertIn("Discovery run", payload["message"])
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT id, status FROM discovery_runs WHERE id = ?",
+                    (payload["run_id"],),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["status"], "success")
+
+    def test_discover_real_mode_without_env_var_returns_400(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                app = ReviewUIApp(db_path)
+                status, body = self._call_app(
+                    app, "POST", "/api/discover", body={"mode": "real"}
+                )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("RALPH_ALLOW_REAL_LLM", payload["error"])
+
+    def test_discover_real_mode_with_env_var_calls_injected_runner(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            recorded: dict[str, object] = {}
+
+            def runner(db_path_arg, *, mode):
+                recorded["db_path"] = Path(db_path_arg)
+                recorded["mode"] = mode
+                return {
+                    "run_id": 42,
+                    "model": "claude-haiku-4-5-20251001",
+                    "prompt_version": "v1",
+                }
+
+            with mock.patch.dict(
+                os.environ, {"RALPH_ALLOW_REAL_LLM": "1"}, clear=True
+            ):
+                app = ReviewUIApp(db_path, discover_runner=runner)
+                status, body = self._call_app(
+                    app, "POST", "/api/discover", body={"mode": "real"}
+                )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertEqual(payload["run_id"], 42)
+            self.assertEqual(payload["mode"], "real")
+            self.assertEqual(payload["model"], "claude-haiku-4-5-20251001")
+            self.assertEqual(recorded["mode"], "real")
+            self.assertEqual(recorded["db_path"], db_path)
+
+    def test_discover_missing_mode_returns_400(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(app, "POST", "/api/discover", body={})
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("mode", payload["error"])
+
+    def test_discover_unknown_mode_returns_400(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/discover", body={"mode": "wild"}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("invalid mode", payload["error"])
+
+    def test_run_discovery_button_html_calls_api_endpoint(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("discover-run-btn", html)
+        self.assertIn("/api/discover", html)
+        self.assertIn("discover-confirm-modal", html)
+
+    def test_ui_revision_advances_for_run_discovery(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("run-discovery", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("reingest", UI_REVISION)
+        self.assertIn("discover-cost", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

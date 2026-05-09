@@ -20,6 +20,7 @@ from yt_channel_analyzer.db import (
     approve_subtopic_suggestion_label,
     approve_topic_suggestion_label,
     bulk_apply_topic_suggestion_label,
+    connect,
     create_comparison_group_suggestion_run,
     create_subtopic_suggestion_run,
     create_topic_suggestion_run,
@@ -71,9 +72,10 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.8-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.9-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
+DISCOVER_MODES = ("stub", "real")
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
 LOW_CONFIDENCE_THRESHOLD_ENV_VAR = "YTA_LOW_CONFIDENCE_THRESHOLD"
@@ -2020,6 +2022,72 @@ HTML_PAGE = """<!doctype html>
       color: var(--ink-soft);
       margin-top: 4px;
     }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(44, 44, 42, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-backdrop[data-open="true"] { display: flex; }
+    .modal-card {
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      padding: 24px 26px;
+      width: min(440px, calc(100vw - 48px));
+      box-shadow: 0 18px 48px rgba(44, 44, 42, 0.18);
+    }
+    .modal-card h3 {
+      margin: 0 0 8px;
+      font-family: var(--display);
+      font-size: 22px;
+      color: var(--ink);
+    }
+    .modal-card p {
+      margin: 0 0 6px;
+      color: var(--ink-soft);
+      line-height: 1.5;
+    }
+    .modal-card .modal-meta {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      background: var(--tag-bg);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin: 14px 0 18px;
+    }
+    .modal-card .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 18px;
+    }
+    .modal-card .modal-actions button {
+      padding: 8px 18px;
+      font-family: var(--body);
+      font-size: 14px;
+      font-weight: 500;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .modal-card .modal-actions .modal-cancel {
+      background: transparent;
+      border: 1px solid var(--rule);
+      color: var(--ink);
+    }
+    .modal-card .modal-actions .modal-confirm {
+      background: var(--ink);
+      border: 1px solid var(--ink);
+      color: var(--paper);
+    }
+    .modal-card .modal-actions .modal-confirm[disabled] {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -2319,6 +2387,18 @@ HTML_PAGE = """<!doctype html>
     </div>
   </main>
 
+  <div class="modal-backdrop" id="discover-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="discover-confirm-title" hidden>
+    <div class="modal-card">
+      <h3 id="discover-confirm-title">Run discovery</h3>
+      <p id="discover-confirm-body">Confirm to run discovery.</p>
+      <div class="modal-meta" id="discover-confirm-meta"></div>
+      <div class="modal-actions">
+        <button type="button" class="modal-cancel" id="discover-confirm-cancel">Cancel</button>
+        <button type="button" class="modal-confirm" id="discover-confirm-go">Run</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const STAGE_ORDER = ['supply', 'discover', 'review', 'consume'];
 
@@ -2331,6 +2411,7 @@ HTML_PAGE = """<!doctype html>
       activeStage: 'review',
       supplySort: 'newest',
       activeDiscoveryRunId: null,
+      discoverMode: 'real',
     };
 
     function setActiveStage(stage) {
@@ -3609,6 +3690,7 @@ HTML_PAGE = """<!doctype html>
       const warnPill = videoCount > 0 && !latest
         ? `<span class="pill-warn">${videoCount} videos · no discovery run yet</span>`
         : '';
+      const realOn = state.discoverMode === 'real';
       host.innerHTML = `
         <div>
           <div class="discover-run-headline">
@@ -3622,16 +3704,76 @@ HTML_PAGE = """<!doctype html>
             <span>~17s</span>
           </div>
           <div class="discover-mode-toggle" role="tablist" aria-label="Discovery mode">
-            <span class="opt on">--real</span>
-            <span class="opt">--stub</span>
+            <button type="button" class="opt ${realOn ? 'on' : ''}" data-mode="real" role="tab" aria-selected="${realOn}">--real</button>
+            <button type="button" class="opt ${realOn ? '' : 'on'}" data-mode="stub" role="tab" aria-selected="${!realOn}">--stub</button>
           </div>
         </div>
         <button class="discover-run-action" id="discover-run-btn">Run discovery →</button>
       `;
-      const btn = document.getElementById('discover-run-btn');
-      if (btn) btn.addEventListener('click', () => setStatus(
-        'Discovery runs are CLI-only — run: yt-channel-analyzer discover <project> --real (requires RALPH_ALLOW_REAL_LLM=1)', true
-      ));
+      host.querySelectorAll('.discover-mode-toggle .opt').forEach((btn) => {
+        btn.addEventListener('click', () => setDiscoverMode(btn.getAttribute('data-mode')));
+      });
+      const runBtn = document.getElementById('discover-run-btn');
+      if (runBtn) runBtn.addEventListener('click', () => openDiscoverConfirm());
+    }
+
+    function setDiscoverMode(mode) {
+      state.discoverMode = (mode === 'stub') ? 'stub' : 'real';
+      renderDiscoverRunPanel(state.payload || {});
+    }
+
+    function openDiscoverConfirm() {
+      const modal = document.getElementById('discover-confirm-modal');
+      const titleEl = document.getElementById('discover-confirm-title');
+      const bodyEl = document.getElementById('discover-confirm-body');
+      const metaEl = document.getElementById('discover-confirm-meta');
+      const goBtn = document.getElementById('discover-confirm-go');
+      if (!modal || !titleEl || !bodyEl || !metaEl || !goBtn) return;
+      const real = state.discoverMode === 'real';
+      titleEl.textContent = real ? 'Run discovery (--real)' : 'Run discovery (--stub)';
+      bodyEl.textContent = real
+        ? 'This will call the Anthropic API and bill tokens against your account. Proceed?'
+        : 'Run a free, deterministic stub discovery. No tokens are spent — useful for wiring sanity checks.';
+      metaEl.textContent = real
+        ? 'Estimate: ~$0.019 · ~17s · requires RALPH_ALLOW_REAL_LLM=1 server-side.'
+        : 'Stub assignments only — does not reflect channel content.';
+      goBtn.textContent = real ? 'Run --real' : 'Run --stub';
+      goBtn.disabled = false;
+      modal.hidden = false;
+      modal.setAttribute('data-open', 'true');
+    }
+
+    function closeDiscoverConfirm() {
+      const modal = document.getElementById('discover-confirm-modal');
+      if (!modal) return;
+      modal.hidden = true;
+      modal.removeAttribute('data-open');
+    }
+
+    async function runDiscoverFromModal() {
+      const goBtn = document.getElementById('discover-confirm-go');
+      const cancelBtn = document.getElementById('discover-confirm-cancel');
+      const runBtn = document.getElementById('discover-run-btn');
+      const mode = state.discoverMode === 'stub' ? 'stub' : 'real';
+      if (goBtn) { goBtn.disabled = true; goBtn.textContent = 'Running…'; }
+      if (cancelBtn) cancelBtn.disabled = true;
+      if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Running…'; }
+      setStatus(`Running ${mode} discovery — this may take a few seconds…`);
+      try {
+        const payload = await postJson('/api/discover', { mode });
+        setStatus(payload.message || `Discovery run ${payload.run_id} complete.`);
+        state.activeDiscoveryRunId = payload.run_id;
+        state.activeStage = 'review';
+        state.focusedTopic = null;
+        state.activeSubtopic = null;
+        await fetchState();
+      } catch (error) {
+        setStatus(error.message || 'Discovery failed.', true);
+      } finally {
+        if (cancelBtn) cancelBtn.disabled = false;
+        if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run discovery →'; }
+        closeDiscoverConfirm();
+      }
     }
 
     function renderDiscoverHistory(payload) {
@@ -3982,6 +4124,17 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('subtopic-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('generate-topics-btn').addEventListener('click', () => generateTopics());
     document.getElementById('generate-subtopics-btn').addEventListener('click', () => generateSubtopics());
+
+    document.getElementById('discover-confirm-cancel').addEventListener('click', () => closeDiscoverConfirm());
+    document.getElementById('discover-confirm-go').addEventListener('click', () => runDiscoverFromModal());
+    document.getElementById('discover-confirm-modal').addEventListener('click', (event) => {
+      if (event.target.id === 'discover-confirm-modal') closeDiscoverConfirm();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape') return;
+      const modal = document.getElementById('discover-confirm-modal');
+      if (modal && modal.getAttribute('data-open') === 'true') closeDiscoverConfirm();
+    });
 
     fetchState().catch((error) => setStatus(error.message, true));
   </script>
@@ -4993,6 +5146,53 @@ def build_state_payload(
     }
 
 
+def _default_discover_runner(db_path: Path, *, mode: str) -> dict[str, Any]:
+    """Default runner for ``POST /api/discover``.
+
+    Picks ``stub_llm`` or the real Anthropic-backed callable per ``mode`` and
+    drives ``run_discovery``. The real path opens a sqlite connection that the
+    Extractor uses to log ``llm_calls`` rows; we close it after the run.
+    The ``RALPH_ALLOW_REAL_LLM=1`` gate is enforced inside
+    ``make_real_llm_callable`` and surfaces here as ``RuntimeError``.
+    """
+    from yt_channel_analyzer.discovery import (
+        DISCOVERY_PROMPT_VERSION,
+        STUB_MODEL,
+        STUB_PROMPT_VERSION,
+        run_discovery,
+        stub_llm,
+    )
+
+    project_name = _resolve_primary_project_name(db_path)
+    if mode == "stub":
+        run_id = run_discovery(
+            db_path,
+            project_name=project_name,
+            llm=stub_llm,
+            model=STUB_MODEL,
+            prompt_version=STUB_PROMPT_VERSION,
+        )
+        return {"run_id": run_id, "model": STUB_MODEL, "prompt_version": STUB_PROMPT_VERSION}
+    if mode == "real":
+        from yt_channel_analyzer.discovery import make_real_llm_callable
+        from yt_channel_analyzer.extractor.anthropic_runner import DEFAULT_MODEL
+
+        connection = connect(db_path)
+        try:
+            llm = make_real_llm_callable(connection)
+            run_id = run_discovery(
+                db_path,
+                project_name=project_name,
+                llm=llm,
+                model=DEFAULT_MODEL,
+                prompt_version=DISCOVERY_PROMPT_VERSION,
+            )
+        finally:
+            connection.close()
+        return {"run_id": run_id, "model": DEFAULT_MODEL, "prompt_version": DISCOVERY_PROMPT_VERSION}
+    raise ReviewUIError(f"unknown discover mode: {mode!r}")
+
+
 class ReviewUIApp:
     def __init__(
         self,
@@ -5001,11 +5201,13 @@ class ReviewUIApp:
         sample_limit: int = 3,
         channel_metadata_fetcher: Any = None,
         channel_videos_fetcher: Any = None,
+        discover_runner: Any = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.sample_limit = sample_limit
         self._channel_metadata_fetcher = channel_metadata_fetcher or _real_fetch_channel_metadata
         self._channel_videos_fetcher = channel_videos_fetcher or _real_fetch_channel_videos
+        self._discover_runner = discover_runner or _default_discover_runner
 
     def __call__(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -5049,6 +5251,8 @@ class ReviewUIApp:
     def _handle_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         if path == "/api/reingest":
             return self._reingest(body)
+        if path == "/api/discover":
+            return self._discover(body)
         run_id_raw = body.get("run_id")
         run_id = int(run_id_raw) if run_id_raw not in (None, "") else None
         if path == "/api/generate/topics":
@@ -5540,6 +5744,32 @@ class ReviewUIApp:
             "video_count": stored_count,
             "last_refreshed_at": last_refreshed_at,
             "message": f"Re-ingested '{channel_title}': stored {stored_count} video(s).",
+        }
+
+    def _discover(self, body: dict[str, Any]) -> dict[str, Any]:
+        mode_raw = body.get("mode") if isinstance(body, dict) else None
+        mode = _normalize_text(mode_raw)
+        if mode is None:
+            raise ReviewUIError("missing required field: mode (must be 'stub' or 'real')")
+        if mode not in DISCOVER_MODES:
+            raise ReviewUIError(
+                f"invalid mode: {mode!r} (must be one of {', '.join(DISCOVER_MODES)})"
+            )
+        try:
+            result = self._discover_runner(self.db_path, mode=mode)
+        except RuntimeError as exc:
+            # `make_real_llm_callable` raises RuntimeError when
+            # RALPH_ALLOW_REAL_LLM is unset — keep the message verbatim
+            # since it's already user-friendly.
+            raise ReviewUIError(str(exc)) from exc
+        run_id = int(result["run_id"])
+        model = str(result.get("model", ""))
+        return {
+            "ok": True,
+            "run_id": run_id,
+            "mode": mode,
+            "model": model,
+            "message": f"Discovery run {run_id} complete (mode={mode}, model={model}).",
         }
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
