@@ -16,6 +16,7 @@ from yt_channel_analyzer.extractor import (
     register_prompt,
     registry as _registry_module,
 )
+from yt_channel_analyzer.extractor.pricing import MODEL_PRICES, estimate_cost
 
 
 SIMPLE_SCHEMA: dict = {
@@ -416,6 +417,77 @@ class TokenUsageTests(_RegistryIsolation):
             [(r["tokens_in"], r["tokens_out"]) for r in rows],
             [(10, 1), (20, 2), (None, None)],
         )
+
+
+class PricingTests(unittest.TestCase):
+    def test_known_model_computes_input_plus_output(self) -> None:
+        cost = estimate_cost("claude-haiku-4-5-20251001", 1_000_000, 1_000_000)
+        self.assertAlmostEqual(cost, 6.00)
+
+    def test_batch_flag_halves_cost(self) -> None:
+        list_cost = estimate_cost("claude-haiku-4-5-20251001", 100, 50)
+        batch_cost = estimate_cost("claude-haiku-4-5-20251001", 100, 50, is_batch=True)
+        self.assertAlmostEqual(batch_cost, list_cost / 2)
+
+    def test_unknown_model_returns_none(self) -> None:
+        self.assertIsNone(estimate_cost("not-a-real-model", 100, 50))
+
+    def test_missing_tokens_returns_none(self) -> None:
+        self.assertIsNone(estimate_cost("claude-haiku-4-5-20251001", None, 50))
+        self.assertIsNone(estimate_cost("claude-haiku-4-5-20251001", 100, None))
+
+    def test_table_covers_three_claude_4_models(self) -> None:
+        self.assertEqual(
+            set(MODEL_PRICES),
+            {"claude-haiku-4-5-20251001", "claude-sonnet-4-6", "claude-opus-4-7"},
+        )
+
+
+class CostEstimateAuditTests(_RegistryIsolation):
+    def setUp(self) -> None:
+        super().setUp()
+        register_prompt(
+            name="p", version="1.0.0", render=_render, schema=SIMPLE_SCHEMA, system="sys"
+        )
+
+    def test_audit_row_records_cost_when_model_is_priced(self) -> None:
+        fake = FakeLLMRunner()
+        fake.model = "claude-haiku-4-5-20251001"
+        fake.add_response("p", "1.0.0", {"topic": "Health", "confidence": 0.9})
+        fake.queue_usage(input_tokens=1000, output_tokens=200)
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            extractor.run_one("p", "1.0.0", {"title": "x"})
+            row = connection.execute(
+                "SELECT cost_estimate_usd FROM llm_calls"
+            ).fetchone()
+        self.assertAlmostEqual(row["cost_estimate_usd"], (1000 * 1.0 + 200 * 5.0) / 1_000_000)
+
+    def test_batch_audit_row_records_discounted_cost(self) -> None:
+        fake = FakeLLMRunner(batch_supported=True)
+        fake.model = "claude-haiku-4-5-20251001"
+        fake.queue_batch_responses("p", "1.0.0", [
+            {"topic": "A", "confidence": 0.1},
+            {"topic": "B", "confidence": 0.2},
+        ])
+        fake.queue_batch_usages([
+            {"input_tokens": 1000, "output_tokens": 200},
+            {"input_tokens": 2000, "output_tokens": 400},
+        ])
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake, batch_threshold=2)
+            jobs = [("p", "1.0.0", {"title": str(i)}, None) for i in range(2)]
+            extractor.run_batch(jobs)
+            costs = [
+                r["cost_estimate_usd"]
+                for r in connection.execute(
+                    "SELECT cost_estimate_usd FROM llm_calls ORDER BY id"
+                )
+            ]
+        self.assertAlmostEqual(costs[0], 0.5 * (1000 * 1.0 + 200 * 5.0) / 1_000_000)
+        self.assertAlmostEqual(costs[1], 0.5 * (2000 * 1.0 + 400 * 5.0) / 1_000_000)
 
 
 class SchemaMigrationTests(unittest.TestCase):

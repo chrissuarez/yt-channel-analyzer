@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Sequence
 
 from yt_channel_analyzer.extractor.errors import ExtractorError, SchemaValidationError
+from yt_channel_analyzer.extractor.pricing import estimate_cost
 from yt_channel_analyzer.extractor.registry import Prompt, get_prompt
 from yt_channel_analyzer.extractor.schema import validate
 
@@ -77,6 +78,10 @@ def _insert_audit_row(
     usage: Optional[dict] = None,
 ) -> None:
     tokens_in, tokens_out = _tokens_from_usage(usage)
+    model = getattr(runner, "model", "unknown")
+    cost_estimate_usd = estimate_cost(
+        model, tokens_in, tokens_out, is_batch=is_batch
+    )
     connection.execute(
         """
         INSERT INTO llm_calls(
@@ -89,14 +94,14 @@ def _insert_audit_row(
             prompt.name,
             prompt.version,
             _content_hash(prompt, rendered),
-            getattr(runner, "model", "unknown"),
+            model,
             getattr(runner, "provider", "unknown"),
             1 if is_batch else 0,
             batch_size,
             parse_status,
             tokens_in,
             tokens_out,
-            None,
+            cost_estimate_usd,
             correlation_id,
         ),
     )
