@@ -335,6 +335,89 @@ class RunBatchTests(_RegistryIsolation):
         self.assertEqual(progress, [(1, 2), (2, 2)])
 
 
+class TokenUsageTests(_RegistryIsolation):
+    def setUp(self) -> None:
+        super().setUp()
+        register_prompt(
+            name="p", version="1.0.0", render=_render, schema=SIMPLE_SCHEMA, system="sys"
+        )
+
+    def test_audit_row_records_token_usage_when_runner_reports_it(self) -> None:
+        fake = FakeLLMRunner()
+        fake.add_response("p", "1.0.0", {"topic": "Health", "confidence": 0.9})
+        fake.queue_usage(input_tokens=123, output_tokens=45)
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            extractor.run_one("p", "1.0.0", {"title": "x"})
+            row = connection.execute(
+                "SELECT tokens_in, tokens_out, cost_estimate_usd FROM llm_calls"
+            ).fetchone()
+        self.assertEqual(row["tokens_in"], 123)
+        self.assertEqual(row["tokens_out"], 45)
+        self.assertIsNone(row["cost_estimate_usd"])
+
+    def test_audit_row_tokens_null_when_runner_does_not_report_usage(self) -> None:
+        fake = FakeLLMRunner()
+        fake.add_response("p", "1.0.0", {"topic": "Health", "confidence": 0.9})
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            extractor.run_one("p", "1.0.0", {"title": "x"})
+            row = connection.execute(
+                "SELECT tokens_in, tokens_out FROM llm_calls"
+            ).fetchone()
+        self.assertIsNone(row["tokens_in"])
+        self.assertIsNone(row["tokens_out"])
+
+    def test_retry_path_records_per_call_usage(self) -> None:
+        fake = FakeLLMRunner()
+        fake.queue_responses("p", "1.0.0", [
+            {"topic": "Health"},
+            {"topic": "Health", "confidence": 0.5},
+        ])
+        fake.queue_usage(input_tokens=100, output_tokens=10)
+        fake.queue_usage(input_tokens=110, output_tokens=20)
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            extractor.run_one("p", "1.0.0", {"title": "x"})
+            rows = connection.execute(
+                "SELECT parse_status, tokens_in, tokens_out FROM llm_calls ORDER BY id"
+            ).fetchall()
+        self.assertEqual(
+            [(r["parse_status"], r["tokens_in"], r["tokens_out"]) for r in rows],
+            [("retry", 100, 10), ("ok", 110, 20)],
+        )
+
+    def test_batch_audit_row_records_per_result_tokens(self) -> None:
+        fake = FakeLLMRunner(batch_supported=True)
+        fake.queue_batch_responses("p", "1.0.0", [
+            {"topic": "A", "confidence": 0.1},
+            {"topic": "B", "confidence": 0.2},
+            {"topic": "C", "confidence": 0.3},
+        ])
+        fake.queue_batch_usages([
+            {"input_tokens": 10, "output_tokens": 1},
+            {"input_tokens": 20, "output_tokens": 2},
+            None,
+        ])
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake, batch_threshold=2)
+            jobs = [
+                ("p", "1.0.0", {"title": str(i)}, None) for i in range(3)
+            ]
+            extractor.run_batch(jobs)
+            rows = connection.execute(
+                "SELECT tokens_in, tokens_out FROM llm_calls ORDER BY id"
+            ).fetchall()
+        self.assertEqual(
+            [(r["tokens_in"], r["tokens_out"]) for r in rows],
+            [(10, 1), (20, 2), (None, None)],
+        )
+
+
 class SchemaMigrationTests(unittest.TestCase):
     def test_llm_calls_table_exists(self) -> None:
         with TemporaryDirectory() as td:

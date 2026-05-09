@@ -34,9 +34,13 @@ class FakeLLMRunner:
     def __init__(self, *, batch_supported: bool = False) -> None:
         self._responses: dict[tuple[str, str], deque[dict]] = defaultdict(deque)
         self._batch_responses: dict[tuple[str, str], deque[dict]] = defaultdict(deque)
+        self._usages: deque[dict[str, int] | None] = deque()
+        self._batch_usages: list[dict[str, int] | None] = []
         self.calls: list[FakeCall] = []
         self.batch_submissions = 0
         self.batch_supported = batch_supported
+        self.last_usage: dict[str, int] | None = None
+        self.last_batch_usages: list[dict[str, int] | None] = []
 
     def add_response(self, name: str, version: str, payload: dict) -> None:
         prompt = get_prompt(name, version)
@@ -50,6 +54,14 @@ class FakeLLMRunner:
     def queue_batch_responses(self, name: str, version: str, payloads: list[dict]) -> None:
         self._batch_responses[(name, version)].extend(payloads)
 
+    def queue_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Queue a per-call usage dict to be exposed via ``last_usage`` after each ``run_single``."""
+        self._usages.append({"input_tokens": input_tokens, "output_tokens": output_tokens})
+
+    def queue_batch_usages(self, usages: list[dict[str, int] | None]) -> None:
+        """Set ``last_batch_usages`` to be exposed after the next ``run_batch_submission``."""
+        self._batch_usages = list(usages)
+
     # --- runner protocol ---
 
     def run_single(self, *, prompt, rendered: str) -> str:
@@ -59,6 +71,7 @@ class FakeLLMRunner:
             raise ExtractorError(
                 f"FakeLLMRunner: no canned response for {prompt.name}@{prompt.version}"
             )
+        self.last_usage = self._usages.popleft() if self._usages else None
         return json.dumps(queue.popleft())
 
     def supports_batch(self) -> bool:
@@ -73,4 +86,5 @@ class FakeLLMRunner:
         queue = self._batch_responses[(prompt.name, prompt.version)]
         if len(queue) < len(rendered_prompts):
             raise ExtractorError("FakeLLMRunner: not enough batch responses queued")
+        self.last_batch_usages = list(self._batch_usages)
         return [json.dumps(queue.popleft()) for _ in rendered_prompts]

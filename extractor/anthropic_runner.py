@@ -24,6 +24,8 @@ class AnthropicRunner:
         self.model = model
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self._client: Any | None = None
+        self.last_usage: dict[str, int] | None = None
+        self.last_batch_usages: list[dict[str, int] | None] = []
 
     def _ensure_client(self) -> Any:
         if self._client is not None:
@@ -48,6 +50,7 @@ class AnthropicRunner:
             system=prompt.system,
             messages=[{"role": "user", "content": rendered}],
         )
+        self.last_usage = _extract_usage(message)
         return _extract_text(message)
 
     def run_batch_submission(self, *, prompt: Prompt, rendered_prompts: list[str]) -> list[str]:
@@ -72,8 +75,13 @@ class AnthropicRunner:
                 break
             time.sleep(2.0)
         results: dict[str, str] = {}
+        usages: dict[str, dict[str, int] | None] = {}
         for entry in client.messages.batches.results(batch_id):
             results[entry.custom_id] = _extract_text(entry.result.message)
+            usages[entry.custom_id] = _extract_usage(entry.result.message)
+        self.last_batch_usages = [
+            usages.get(f"req-{i}") for i in range(len(rendered_prompts))
+        ]
         return [results[f"req-{i}"] for i in range(len(rendered_prompts))]
 
 
@@ -85,3 +93,17 @@ def _extract_text(message: Any) -> str:
         if text:
             texts.append(text)
     return "".join(texts)
+
+
+def _extract_usage(message: Any) -> dict[str, int] | None:
+    usage = getattr(message, "usage", None)
+    if usage is None:
+        return None
+    input_tokens = getattr(usage, "input_tokens", None)
+    output_tokens = getattr(usage, "output_tokens", None)
+    if input_tokens is None and output_tokens is None:
+        return None
+    return {
+        "input_tokens": int(input_tokens) if input_tokens is not None else 0,
+        "output_tokens": int(output_tokens) if output_tokens is not None else 0,
+    }

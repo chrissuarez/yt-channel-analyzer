@@ -56,6 +56,14 @@ def _parse(raw_text: str, schema: dict) -> dict:
     return data
 
 
+def _tokens_from_usage(
+    usage: Optional[dict],
+) -> tuple[Optional[int], Optional[int]]:
+    if not usage:
+        return None, None
+    return usage.get("input_tokens"), usage.get("output_tokens")
+
+
 def _insert_audit_row(
     connection: sqlite3.Connection,
     *,
@@ -66,7 +74,9 @@ def _insert_audit_row(
     batch_size: int,
     parse_status: str,
     correlation_id: Optional[int],
+    usage: Optional[dict] = None,
 ) -> None:
+    tokens_in, tokens_out = _tokens_from_usage(usage)
     connection.execute(
         """
         INSERT INTO llm_calls(
@@ -84,8 +94,8 @@ def _insert_audit_row(
             1 if is_batch else 0,
             batch_size,
             parse_status,
-            None,
-            None,
+            tokens_in,
+            tokens_out,
             None,
             correlation_id,
         ),
@@ -172,6 +182,7 @@ class Extractor:
     ) -> ParsedResult:
         rendered = prompt.render(context)
         raw_text = self._runner.run_single(prompt=prompt, rendered=rendered)
+        first_usage = getattr(self._runner, "last_usage", None)
         try:
             data = _parse(raw_text, prompt.schema)
         except SchemaValidationError:
@@ -184,8 +195,10 @@ class Extractor:
                 batch_size=batch_size,
                 parse_status="retry",
                 correlation_id=correlation_id,
+                usage=first_usage,
             )
             raw_text = self._runner.run_single(prompt=prompt, rendered=rendered)
+            second_usage = getattr(self._runner, "last_usage", None)
             try:
                 data = _parse(raw_text, prompt.schema)
             except SchemaValidationError:
@@ -198,6 +211,7 @@ class Extractor:
                     batch_size=batch_size,
                     parse_status="failed",
                     correlation_id=correlation_id,
+                    usage=second_usage,
                 )
                 raise
             _insert_audit_row(
@@ -209,6 +223,7 @@ class Extractor:
                 batch_size=batch_size,
                 parse_status="ok",
                 correlation_id=correlation_id,
+                usage=second_usage,
             )
             return ParsedResult(data=data, raw_text=raw_text, parse_status="retry")
 
@@ -221,6 +236,7 @@ class Extractor:
             batch_size=batch_size,
             parse_status="ok",
             correlation_id=correlation_id,
+            usage=first_usage,
         )
         return ParsedResult(data=data, raw_text=raw_text, parse_status="ok")
 
@@ -236,6 +252,9 @@ class Extractor:
         )
         if len(raw_texts) != len(jobs):
             raise ExtractorError("batch runner returned wrong number of responses")
+        batch_usages = list(getattr(self._runner, "last_batch_usages", None) or [])
+        if len(batch_usages) < len(raw_texts):
+            batch_usages = batch_usages + [None] * (len(raw_texts) - len(batch_usages))
 
         results: list[ParsedResult] = []
         total = len(jobs)
@@ -243,6 +262,7 @@ class Extractor:
         for i, ((_n, _v, _ctx, correlation_id), rendered, raw_text) in enumerate(
             zip(jobs, rendered_prompts, raw_texts), start=1
         ):
+            usage = batch_usages[i - 1]
             try:
                 data = _parse(raw_text, prompt.schema)
                 parse_status = "ok"
@@ -256,6 +276,7 @@ class Extractor:
                     batch_size=batch_size,
                     parse_status="failed",
                     correlation_id=correlation_id,
+                    usage=usage,
                 )
                 raise
             _insert_audit_row(
@@ -267,6 +288,7 @@ class Extractor:
                 batch_size=batch_size,
                 parse_status=parse_status,
                 correlation_id=correlation_id,
+                usage=usage,
             )
             results.append(
                 ParsedResult(data=data, raw_text=raw_text, parse_status=parse_status)
