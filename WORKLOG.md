@@ -27,6 +27,50 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-09 — Sticky-curation validation run 2 (3/3 paths PASS), server deadlock fix, CLAUDE.md added
+
+### Done
+- Run 2 of sticky-curation validation succeeded on first try (`discovery_runs.id=2`, Haiku 4.5, prompt `discovery-v4`, ~$0.019; cumulative `tmp/doac-sticky.sqlite` spend ~$0.057). Log: `/tmp/doac-sticky-run2-20260509-073437.log`.
+- Validated all three sticky-curation paths against run 2's `video_topics`/`video_subtopics`: rename replay (Haiku re-proposed "Sexual Health & Relationships" → chain rewrote to "Sex & Intimacy", 4 eps under new name); wrong-topic suppression (`video_id=4 AND topic_id=6` has 0 rows); wrong-subtopic suppression (`video_id=7 AND subtopic_id=7` has 0 rows).
+- Fixed review-UI server deadlock: stdlib `wsgiref.simple_server.make_server` is single-threaded; VSCode remote's port-forward auto-detection (node pid 1457) was opening 12+ parallel probes to :8765, queue backed up, `wait_w` hang. Wrapped with `_ThreadingWSGIServer(ThreadingMixIn, WSGIServer)` + `daemon_threads=True`. Self-probe now ~1ms. Real bug, not VSCode-specific.
+- Added `CLAUDE.md` (via `/init`) capturing package layout (parent-dir + `PYTHONPATH=.` quirk), verify gate, real-LLM gating, the `discovery.stub_llm`-as-`LLMCallable` pattern, ADR pointers, Ralph harness conventions.
+
+### Learned
+- **Sticky-curation chain is exact-string-match**, not semantic. Haiku rephrased "Personal Development & Success" as "Personal Development & Discipline" in run 2; the user's rename to "Self-Improvement" did NOT replay — chain looks for verbatim `old_name` in proposed `topics[].name`. Same logic for wrong-marks (cured `topic_id` doesn't transfer to LLM-renamed proposals). By design, but means Haiku word-choice variance silently bypasses curation. Doc + future fuzzy-match slice.
+- `llm_calls.tokens_in`, `tokens_out`, `cost_estimate_usd` are **all NULL** across all 3 rows. Schema provisioned, `extractor/anthropic_runner.py` doesn't fill them. Operator-workflow doc's "queryable cost" claim is currently false.
+- Failed-validation paid calls *do* land in `llm_calls` (3 calls, 2 successful `discovery_runs`) — audit trail intact even when `discovery_runs` row is missing.
+- Existing Windows-side network setup uses **netsh portproxy + firewall rule** hardcoded to WSL IP `192.168.83.240` for ports 8765 / 2222→22 / 18789 / 18888. All break together when WSL IP drifts on restart. Win11 build 26200 supports mirrored networking; switch deferred (kills Claude session).
+
+### Next
+- Commit working-tree changes on `main`: `review_ui.py` orphan-addEventListener removal (yesterday) + `_ThreadingWSGIServer` mixin (today) + WORKLOG entries + new `CLAUDE.md`. Two small commits or one combined.
+- Switch to mirrored networking (`C:\Users\Dad\.wslconfig`: `[wsl2]\nnetworkingMode=mirrored` + `wsl --shutdown` from PowerShell) at the next session boundary.
+- Fix the port-default doc bug (`docs/operator-workflow.md:120`, `YT_ANALYZER_CHEATSHEET.md:65`: `8000` → `8765`).
+- Wire `llm_calls.tokens_in/out/cost_estimate_usd` in `extractor/anthropic_runner.py` (small slice).
+- Errored-run + raw-response persistence slice (addresses the $0.019 lost on run 1's first try).
+- User flagged "UI feels clunky" without specifics — capture concrete pain points to `.scratch/ui-clunk/` before any redesign.
+
+---
+
+## 2026-05-08 — Slice 02b CLI `--real` + sticky-curation validation run 1
+
+### Done
+- Shipped slice 02b (commit `dc80758`, FF-merged): `discover` and `analyze` now take a required `--stub|--real` mutex + optional `--model`; `--real` enforces `RALPH_ALLOW_REAL_LLM=1` inside `make_real_llm_callable`. 6 new/renamed tests, 214 verify-gate tests green.
+- Updated `docs/operator-workflow.md` §3 + `YT_ANALYZER_CHEATSHEET.md` §1 with real-mode recipe; ROADMAP §A5 box 3 sub-bullet ticked.
+- Kicked off second DOAC validation: ran `analyze --real` on fresh `tmp/doac-sticky.sqlite` — first call hit a `discovery.py:723` payload-validation error (Haiku referenced an undeclared subtopic), retry on Haiku worked first try. Run 1 on disk: discovery_runs id=1, 6 topics, 12 subtopics, confidence 0.70–0.95. Spent ~$0.038.
+
+### Learned
+- The CLI does not persist anything when `run_discovery` rejects a payload mid-validation: no errored row, no raw response. So a paid call that fails validation is invisible on disk. Worth a small follow-up slice (errored-run row + raw-response capture before validating).
+- `review_ui.py:1975` had an orphan `getElementById('generate-comparison-groups-btn').addEventListener` left over from §A4's legacy-move slice — the button was hidden but the handler stayed, throwing on page load and skipping initial `fetchState()`. Removed the line; uncommitted in working tree.
+- The CLI's serve-review-ui default port is **8765** but `docs/operator-workflow.md:120` and `YT_ANALYZER_CHEATSHEET.md:65` still say `127.0.0.1:8000`. Pre-existing doc bug.
+
+### Next
+- User is curating in the review UI (rename ≥1 topic + mark ≥1 wrong-assignment). When ready, fire run 2 (`discover --real` on the same DB, ~$0.019) and verify renames carried forward + wrong assignments stayed suppressed.
+- Commit the `review_ui.py` JS fix with a regression test (parse served HTML, assert every `getElementById(id).addEventListener` has a matching `id="..."` in the markup).
+- Fix the port-default doc bug.
+- Consider an errored-run + raw-response persistence slice.
+
+---
+
 ## 2026-05-08 — Issue 13 / Ralph iteration 3: comparison readiness polish + COMPLETE
 
 ### Done

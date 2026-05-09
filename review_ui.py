@@ -6,7 +6,12 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
-from wsgiref.simple_server import make_server
+from socketserver import ThreadingMixIn
+from wsgiref.simple_server import WSGIServer, make_server
+
+
+class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
+    daemon_threads = True
 
 from yt_channel_analyzer.db import (
     apply_subtopic_suggestion_to_video,
@@ -3380,7 +3385,7 @@ def serve_review_ui(db_path: str | Path, *, host: str = "127.0.0.1", port: int =
     app = build_review_app(db_path, sample_limit=sample_limit)
     print(f"Serving review UI for {Path(db_path)}")
     print(f"Open http://{host}:{port}")
-    with make_server(host, port, app) as server:
+    with make_server(host, port, app, server_class=_ThreadingWSGIServer) as server:
         try:
             server.serve_forever()
         except KeyboardInterrupt:
