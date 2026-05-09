@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import re
@@ -365,6 +366,28 @@ def _payload_from_response(data: dict) -> "DiscoveryPayload":
     )
 
 
+def _call_llm_with_optional_correlation(
+    llm: "LLMCallable",
+    videos: Sequence[DiscoveryVideo],
+    correlation_id: int,
+) -> "DiscoveryPayload":
+    """Pass ``correlation_id`` only when the callable accepts it.
+
+    Test fixtures throughout the suite use bare ``def f(_videos): ...`` lambdas;
+    the real adapter (`discovery_llm_via_extractor`) and ``stub_llm`` accept
+    the kwarg. Detecting per-call keeps both shapes working without forcing
+    every fixture to carry a no-op ``**kwargs``.
+    """
+    try:
+        sig = inspect.signature(llm)
+    except (TypeError, ValueError):
+        return llm(videos)
+    for param in sig.parameters.values():
+        if param.name == "correlation_id" or param.kind is inspect.Parameter.VAR_KEYWORD:
+            return llm(videos, correlation_id=correlation_id)
+    return llm(videos)
+
+
 def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
     """Adapt an Extractor into the LLMCallable signature `run_discovery` expects.
 
@@ -374,12 +397,17 @@ def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
     """
     register_discovery_prompt()
 
-    def call(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
+    def call(
+        videos: Sequence[DiscoveryVideo],
+        *,
+        correlation_id: int | None = None,
+    ) -> DiscoveryPayload:
         context = _videos_to_context(videos)
         result = extractor.run_one(
             DISCOVERY_PROMPT_NAME,
             DISCOVERY_PROMPT_VERSION,
             context,
+            correlation_id=correlation_id,
         )
         return _payload_from_response(result.data)
 
@@ -416,10 +444,19 @@ STUB_SUBTOPIC_NAME = "General sub"
 STUB_SECONDARY_TOPIC_NAME = "Cross-cutting"
 
 
-def stub_llm(videos: Sequence[DiscoveryVideo]) -> DiscoveryPayload:
+def stub_llm(
+    videos: Sequence[DiscoveryVideo],
+    *,
+    correlation_id: int | None = None,
+) -> DiscoveryPayload:
     """Hardcoded LLM stub: every video gets a primary-topic assignment, and
     the first video carries a second assignment under a secondary topic so
     the multi-topic display path is exercisable without spending tokens.
+
+    Accepts ``correlation_id`` to match the post-2026-05-10 ``LLMCallable``
+    convention (``run_discovery`` threads ``discovery_run_id`` through so the
+    real-LLM adapter can stamp it on ``llm_calls`` for cost rollups). The stub
+    ignores it.
     """
     primary_assignments = [
         DiscoveryAssignment(
@@ -616,24 +653,37 @@ def run_discovery(
         ]
         video_id_by_yt = {row["youtube_video_id"]: row["id"] for row in video_rows}
 
+        # Pre-allocate the discovery_runs row so we have a stable id to thread
+        # as ``correlation_id`` into the LLM call. The Discover history view
+        # joins ``llm_calls.cost_estimate_usd`` back to ``discovery_runs.id``
+        # via that column, so without pre-allocation discovery rows would have
+        # NULL cost. Optimistically marked 'success' — flipped to 'error' on
+        # either the LLM-call or persistence failure paths below.
+        pre_cursor = connection.cursor()
+        pre_cursor.execute(
+            """
+            INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
+            VALUES (?, ?, ?, 'success')
+            """,
+            (channel_id, model, prompt_version),
+        )
+        run_id = pre_cursor.lastrowid
+        connection.commit()
+
         try:
-            payload = llm(videos)
+            payload = _call_llm_with_optional_correlation(llm, videos, run_id)
         except Exception as exc:
-            # LLM (or its retry) failed — record an errored run row so the
-            # failure is auditable, persist no partial topic / assignment
-            # state, and re-raise for the caller. Slice 02 acceptance:
-            # "on second failure the run is marked errored and no partial
-            # state is persisted". No raw_response: the LLM raised before
-            # returning a payload.
-            err_cursor = connection.cursor()
-            err_cursor.execute(
+            # LLM (or its retry) failed — flip the pre-allocated run to errored
+            # so the failure is auditable, persist no partial topic / assignment
+            # state, and re-raise for the caller. No raw_response: the LLM
+            # raised before returning a payload.
+            connection.execute(
                 """
-                INSERT INTO discovery_runs(
-                    channel_id, model, prompt_version, status, error_message
-                )
-                VALUES (?, ?, ?, 'error', ?)
+                UPDATE discovery_runs
+                SET status = 'error', error_message = ?
+                WHERE id = ?
                 """,
-                (channel_id, model, prompt_version, str(exc)),
+                (str(exc), run_id),
             )
             connection.commit()
             raise
@@ -643,14 +693,6 @@ def run_discovery(
             payload = _apply_renames_to_payload(connection, project_id, payload)
 
             cursor = connection.cursor()
-            cursor.execute(
-                """
-                INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
-                VALUES (?, ?, ?, 'success')
-                """,
-                (channel_id, model, prompt_version),
-            )
-            run_id = cursor.lastrowid
 
             topic_id_by_name: dict[str, int] = {}
             for topic_name in payload.topics:
@@ -759,23 +801,20 @@ def run_discovery(
             # Validation or persistence failed after the LLM returned a
             # payload — the API call has already been billed, so capture
             # the raw payload + error so the user can re-debug instead
-            # of silently losing the response.
+            # of silently losing the response. The pre-allocated run row
+            # survives the rollback (it was committed before the LLM call),
+            # so we UPDATE it in place rather than inserting a duplicate.
             connection.rollback()
-            err_cursor = connection.cursor()
-            err_cursor.execute(
+            connection.execute(
                 """
-                INSERT INTO discovery_runs(
-                    channel_id, model, prompt_version, status,
-                    error_message, raw_response
-                )
-                VALUES (?, ?, ?, 'error', ?, ?)
+                UPDATE discovery_runs
+                SET status = 'error', error_message = ?, raw_response = ?
+                WHERE id = ?
                 """,
                 (
-                    channel_id,
-                    model,
-                    prompt_version,
                     str(exc),
                     json.dumps(asdict(raw_payload)),
+                    run_id,
                 ),
             )
             connection.commit()

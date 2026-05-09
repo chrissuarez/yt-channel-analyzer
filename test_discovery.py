@@ -5607,5 +5607,167 @@ class ComparisonReadinessHTMLTests(unittest.TestCase):
         self.assertIn("discovery", UI_REVISION)
 
 
+class DiscoverRunsCostRollupTests(unittest.TestCase):
+    """Cost-per-run rollup in the Discover history panel.
+
+    `run_discovery` threads its newly-allocated `discovery_run_id` as
+    `correlation_id` into the LLM call so `_build_discover_runs` can
+    `SUM(cost_estimate_usd)` per run via `llm_calls.correlation_id`.
+    """
+
+    def test_run_discovery_threads_correlation_id_into_llm_calls(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_NAME,
+            DISCOVERY_PROMPT_VERSION,
+            discovery_llm_via_extractor,
+            register_discovery_prompt,
+            run_discovery,
+        )
+        from yt_channel_analyzer.extractor import Extractor
+
+        saved = dict(_registry_module._PROMPTS)
+        _registry_module._PROMPTS.clear()
+        try:
+            register_discovery_prompt()
+            runner = FakeLLMRunner()
+            runner.add_response(
+                DISCOVERY_PROMPT_NAME,
+                DISCOVERY_PROMPT_VERSION,
+                {
+                    "topics": ["Health"],
+                    "assignments": [
+                        {
+                            "youtube_video_id": "vid1",
+                            "topic": "Health",
+                            "confidence": 0.9,
+                            "reason": "fixture",
+                        },
+                        {
+                            "youtube_video_id": "vid2",
+                            "topic": "Health",
+                            "confidence": 0.9,
+                            "reason": "fixture",
+                        },
+                    ],
+                },
+            )
+
+            with TemporaryDirectory() as tmpdir:
+                db_path = Path(tmpdir) / "test.sqlite3"
+                _seed_channel_with_videos(db_path)
+                with connect(db_path) as conn:
+                    ensure_schema(conn)
+                    extractor = Extractor(connection=conn, runner=runner)
+                    callable_ = discovery_llm_via_extractor(extractor)
+                    run_id = run_discovery(
+                        db_path,
+                        project_name="proj",
+                        llm=callable_,
+                        model="fake-model",
+                        prompt_version=DISCOVERY_PROMPT_VERSION,
+                    )
+
+                with connect(db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        "SELECT correlation_id FROM llm_calls"
+                    ).fetchall()
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(rows[0]["correlation_id"], run_id)
+        finally:
+            _registry_module._PROMPTS.clear()
+            _registry_module._PROMPTS.update(saved)
+
+    def test_build_discover_runs_returns_cost_estimate_usd_when_seeded(
+        self,
+    ) -> None:
+        from yt_channel_analyzer.discovery import stub_llm
+        from yt_channel_analyzer.review_ui import _build_discover_runs
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            with connect(db_path) as conn:
+                channel_id = conn.execute(
+                    "SELECT id FROM channels WHERE is_primary = 1"
+                ).fetchone()[0]
+                # Seed two llm_calls rows (e.g. one initial + one retry) so the
+                # SUM rollup is exercised, not just a single-row pass-through.
+                conn.execute(
+                    """
+                    INSERT INTO llm_calls(
+                        prompt_name, prompt_version, content_hash, model, provider,
+                        is_batch, batch_size, parse_status, tokens_in, tokens_out,
+                        cost_estimate_usd, correlation_id
+                    ) VALUES (?, ?, ?, ?, ?, 0, 1, 'ok', 100, 50, ?, ?)
+                    """,
+                    ("discovery.topics", "stub-v0", "h", "x", "fake", 0.0012, run_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO llm_calls(
+                        prompt_name, prompt_version, content_hash, model, provider,
+                        is_batch, batch_size, parse_status, tokens_in, tokens_out,
+                        cost_estimate_usd, correlation_id
+                    ) VALUES (?, ?, ?, ?, ?, 0, 1, 'ok', 100, 50, ?, ?)
+                    """,
+                    ("discovery.topics", "stub-v0", "h", "x", "fake", 0.0007, run_id),
+                )
+                conn.commit()
+
+            runs = _build_discover_runs(db_path, channel_id)
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["id"], run_id)
+            self.assertAlmostEqual(runs[0]["cost_estimate_usd"], 0.0019)
+
+    def test_build_discover_runs_cost_is_none_when_no_llm_calls(self) -> None:
+        from yt_channel_analyzer.discovery import stub_llm
+        from yt_channel_analyzer.review_ui import _build_discover_runs
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            with connect(db_path) as conn:
+                channel_id = conn.execute(
+                    "SELECT id FROM channels WHERE is_primary = 1"
+                ).fetchone()[0]
+
+            runs = _build_discover_runs(db_path, channel_id)
+            self.assertEqual(len(runs), 1)
+            self.assertIsNone(runs[0]["cost_estimate_usd"])
+
+    def test_html_discover_run_row_renders_cost_cell(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("dr-cost", html)
+        self.assertIn("cost_estimate_usd", html)
+
+    def test_ui_revision_advances_for_discover_cost(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("discover-cost", UI_REVISION)
+        # Prior substrings preserved so earlier UI_REVISION assertions
+        # still hold.
+        self.assertIn("comparison-readiness", UI_REVISION)
+        self.assertIn("channel-overview", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

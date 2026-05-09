@@ -62,7 +62,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-08.5-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.6-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -1802,11 +1802,21 @@ HTML_PAGE = """<!doctype html>
     }
     .discover-run-row {
       display: grid;
-      grid-template-columns: 70px 1.4fr 1fr 0.8fr 0.9fr 28px;
+      grid-template-columns: 70px 1.4fr 1fr 0.8fr 0.9fr 0.55fr 28px;
       gap: 18px;
       padding: 20px 0;
       border-bottom: 1px solid var(--rule);
       align-items: flex-start;
+    }
+    .discover-run-row .dr-cost {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      padding-top: 4px;
+      text-align: right;
+    }
+    .discover-run-row .dr-cost.dr-cost-empty {
+      color: var(--ink-mute);
     }
     .discover-run-row .dr-num {
       font-family: var(--display);
@@ -3588,6 +3598,11 @@ HTML_PAGE = """<!doctype html>
       const successCount = runs.filter((r) => r.status === 'success').length;
       const errorCount = runs.filter((r) => r.status === 'error').length;
       summary.textContent = `${successCount} successful${errorCount ? ' · ' + errorCount + ' errored' : ''}`;
+      const formatCost = (c) => {
+        if (c == null) return { text: '—', empty: true };
+        if (c < 0.001) return { text: '<$0.001', empty: false };
+        return { text: '$' + c.toFixed(c < 0.01 ? 4 : 3), empty: false };
+      };
       list.innerHTML = runs.map((r) => {
         const statusPill = r.status === 'success'
           ? '<span class="pill pill-good"><span class="pill-dot"></span>success</span>'
@@ -3595,6 +3610,8 @@ HTML_PAGE = """<!doctype html>
         const errLine = r.error_message
           ? `<div class="dr-error">${escapeHtml(r.error_message).slice(0, 120)}</div>`
           : '';
+        const cost = formatCost(r.cost_estimate_usd);
+        const costClass = cost.empty ? 'dr-cost dr-cost-empty' : 'dr-cost';
         return `
           <div class="discover-run-row">
             <span class="dr-num">#${r.id}</span>
@@ -3605,6 +3622,7 @@ HTML_PAGE = """<!doctype html>
             <span class="dr-when">${escapeHtml(formatDateTime(r.created_at))}</span>
             <span class="dr-status">${statusPill}</span>
             <span class="dr-counts">${r.topic_count} topics · ${r.episode_count} eps</span>
+            <span class="${costClass}">${cost.text}</span>
             <span class="dr-chevron">›</span>
           </div>
         `;
@@ -4402,6 +4420,15 @@ def _build_discover_runs(
                 """,
                 (run_id,),
             ).fetchone()
+            cost_row = connection.execute(
+                """
+                SELECT SUM(cost_estimate_usd) AS total_cost
+                FROM llm_calls
+                WHERE correlation_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            total_cost = cost_row["total_cost"] if cost_row else None
             out.append(
                 {
                     "id": run_id,
@@ -4412,6 +4439,9 @@ def _build_discover_runs(
                     "created_at": row["created_at"],
                     "topic_count": int(counts["topic_count"] or 0),
                     "episode_count": int(counts["episode_count"] or 0),
+                    "cost_estimate_usd": (
+                        float(total_cost) if total_cost is not None else None
+                    ),
                 }
             )
         return out
