@@ -27,6 +27,24 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-09 (pm) — Cleanup commits + tokens_in/out wiring
+
+### Done
+- Split the working-tree fixes into three commits on `main`: `f250bb0` (orphan `addEventListener` removal), `04b4657` (threading WSGI mixin + WORKLOG entries), `a5b8cdf` (`CLAUDE.md`). Verify gate green at 214 throughout.
+- `e85c833` fixed stale `127.0.0.1:8000` default-port references in `docs/operator-workflow.md:120` + `YT_ANALYZER_CHEATSHEET.md:65` → `8765`.
+- `974c209` wired `tokens_in`/`tokens_out` end-to-end (`AnthropicRunner.last_usage` + `last_batch_usages` → `Extractor` → `llm_calls` audit row, success/retry/failed paths). `FakeLLMRunner` gained `queue_usage` / `queue_batch_usages`. Verify gate 218 (+4 `TokenUsageTests`). `cost_estimate_usd` deliberately NULL — pricing follow-up.
+
+### Decisions
+- Skipped a regression test for the orphan `addEventListener` bug — would tie tests to embedded HTML string format that isn't load-bearing elsewhere; defer until similar bug recurs.
+- For `cost_estimate_usd`: user opted to ship tokens-only and defer the price table. Cost becomes queryable as `tokens × external price` until the table lands.
+
+### Next
+- #5 errored-run + raw-response persistence (the $0.019 lost on run 1's first try is the canonical case).
+- #6 UI clunkiness triage to `.scratch/ui-clunk/`.
+- #7 fuzzy-match fallback for sticky-curation, #8 Phase B/C scoping, mirrored-networking switch (kills the session — do at boundary).
+
+---
+
 ## 2026-05-09 — Sticky-curation validation run 2 (3/3 paths PASS), server deadlock fix, CLAUDE.md added
 
 ### Done
