@@ -1942,3 +1942,12 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - Verify gate: 204 tests green (~50s; +4 vs prior iter).
 - HTML pill / CSS / `UI_REVISION` bump intentionally deferred to issue-13 box 2 next iteration (per ROADMAP §A8 split).
 - Note: prompt referenced `.scratch/phase-a-topic-map/issues/13-*.md` but issue spec lives at `.ralph/issues/13-comparison-readiness.md` (same pattern as issues 11 + 12 — Ralph-overlay issue files live under `.ralph/issues/`).
+
+## 2026-05-09 — Edit channel form wired (commit `dfffc9d`)
+
+- New `db.update_channel_fields(channel_id, title, handle, description)` — UPDATE-only on the three display fields, raises `ValueError` on unknown channel id. YouTube-derived columns (thumbnail_url, published_at, last_refreshed_at) untouched.
+- New `POST /api/channel/edit` in `review_ui.py`: validates title via `_normalize_text` (blank/missing → 400), persists, returns updated channel info from `_build_supply_channel`. Re-ingest still overwrites — design choice, hint text in modal documents it.
+- Supply stage's Edit button (previously a `setStatus(... CLI-only ...)` stub at `:3600`) now opens new `#channel-edit-modal` (paper/ink palette, reuses existing modal CSS, adds form/input/textarea/hint styles). Modal pre-fills from `state.payload.supply_channel`; submit POSTs and refetches state. Per-modal Escape + backdrop close wired alongside discover modal.
+- 7 new tests in `ChannelEditEndpointTests`: happy path, blank handle/description persist as NULL, missing-title 400, blank-title 400, no-primary-channel 400, HTML wiring, UI_REVISION substring preservation.
+- `UI_REVISION` bumped to `2026-05-10.10-edit-channel-form-…` preserving prior substrings (run-discovery, reingest, discover-cost, comparison-readiness, channel-overview).
+- Verify gate: 260 tests green (+7).
