@@ -1972,7 +1972,6 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('subtopic-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('generate-topics-btn').addEventListener('click', () => generateTopics());
     document.getElementById('generate-subtopics-btn').addEventListener('click', () => generateSubtopics());
-    document.getElementById('generate-comparison-groups-btn').addEventListener('click', () => generateComparisonGroups());
 
     fetchState().catch((error) => setStatus(error.message, true));
   </script>
