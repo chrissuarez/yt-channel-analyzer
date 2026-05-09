@@ -73,9 +73,11 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.10-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.11-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
+SUPPLY_DEFAULT_LIMIT = 50
+SUPPLY_MAX_LIMIT = 500
 DISCOVER_MODES = ("stub", "real")
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -1701,10 +1703,23 @@ HTML_PAGE = """<!doctype html>
       display: flex;
       justify-content: space-between;
       align-items: center;
+      gap: 12px;
       font-family: var(--mono);
       font-size: 12px;
       color: var(--ink-soft);
     }
+    .supply-load-more {
+      font-family: var(--mono);
+      font-size: 12px;
+      padding: 6px 14px;
+      border: 1px solid var(--rule);
+      border-radius: 4px;
+      background: var(--paper);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .supply-load-more:hover { background: var(--tag-bg); }
+    .supply-load-more:disabled { opacity: 0.6; cursor: progress; }
 
     /* ---------- Discover stage ---------- */
     .discover-h1 {
@@ -2463,6 +2478,7 @@ HTML_PAGE = """<!doctype html>
       overviewSort: 'episodes',
       activeStage: 'review',
       supplySort: 'newest',
+      supplyLimit: 50,
       activeDiscoveryRunId: null,
       discoverMode: 'real',
     };
@@ -2575,6 +2591,9 @@ HTML_PAGE = """<!doctype html>
       if (subtopic) params.set('subtopic', subtopic);
       if (state.activeDiscoveryRunId != null) {
         params.set('discovery_run_id', String(state.activeDiscoveryRunId));
+      }
+      if (state.supplyLimit) {
+        params.set('supply_limit', String(state.supplyLimit));
       }
       const response = await fetch(`/api/state?${params.toString()}`);
       const payload = await response.json();
@@ -3794,10 +3813,40 @@ HTML_PAGE = """<!doctype html>
 
       const totalShown = videos.length;
       const totalAll = payload.channel_overview?.video_count ?? totalShown;
-      const more = totalAll > totalShown
-        ? `<span>Showing ${totalShown} of ${totalAll} videos</span><span class="sep">extend the limit in <code>_build_supply_videos</code> to load more</span>`
+      const maxLimit = payload.supply_max_limit ?? 500;
+      const reachedCap = totalShown >= maxLimit;
+      const hasMore = totalAll > totalShown && !reachedCap;
+      let footerHtml = totalAll > totalShown
+        ? `<span>Showing ${totalShown} of ${totalAll} videos</span>`
         : `<span>Showing all ${totalShown} ${totalShown === 1 ? 'video' : 'videos'}</span>`;
-      footer.innerHTML = more;
+      if (hasMore) {
+        footerHtml += `<button type="button" class="supply-load-more" id="supply-load-more">Load more</button>`;
+      } else if (reachedCap && totalAll > totalShown) {
+        footerHtml += `<span class="sep">cap of ${maxLimit} reached</span>`;
+      }
+      footer.innerHTML = footerHtml;
+      const loadMoreBtn = document.getElementById('supply-load-more');
+      if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', () => loadMoreSupply());
+      }
+    }
+
+    async function loadMoreSupply() {
+      const payload = state.payload;
+      if (!payload) return;
+      const totalAll = payload.channel_overview?.video_count ?? 0;
+      const maxLimit = payload.supply_max_limit ?? 500;
+      const currentLimit = payload.supply_limit ?? state.supplyLimit ?? 50;
+      const next = Math.min(currentLimit + 50, totalAll || (currentLimit + 50), maxLimit);
+      if (next <= currentLimit) return;
+      state.supplyLimit = next;
+      const btn = document.getElementById('supply-load-more');
+      if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+      try {
+        await fetchState();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
     }
 
     function renderDiscoverRunPanel(payload) {
@@ -4732,7 +4781,7 @@ def _build_supply_channel(
 
 
 def _build_supply_videos(
-    db_path: Path, channel_id: int, *, limit: int = 50
+    db_path: Path, channel_id: int, *, limit: int = SUPPLY_DEFAULT_LIMIT
 ) -> list[dict[str, Any]]:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
@@ -5012,7 +5061,10 @@ def build_state_payload(
     subtopic_name: str | None = None,
     sample_limit: int = 3,
     discovery_run_id: int | None = None,
+    supply_limit: int | None = None,
 ) -> dict[str, Any]:
+    effective_supply_limit = SUPPLY_DEFAULT_LIMIT if supply_limit is None else supply_limit
+    effective_supply_limit = max(1, min(int(effective_supply_limit), SUPPLY_MAX_LIMIT))
     db_path = Path(db_path)
     try:
         primary_channel = get_primary_channel(db_path)
@@ -5228,7 +5280,7 @@ def build_state_payload(
             db_path, channel_id=primary_channel.channel_id
         )
         supply_videos = _build_supply_videos(
-            db_path, channel_id=primary_channel.channel_id
+            db_path, channel_id=primary_channel.channel_id, limit=effective_supply_limit
         )
         discover_runs = _build_discover_runs(
             db_path, channel_id=primary_channel.channel_id
@@ -5250,6 +5302,8 @@ def build_state_payload(
         "channel_overview": channel_overview,
         "supply_channel": supply_channel,
         "supply_videos": supply_videos,
+        "supply_limit": effective_supply_limit,
+        "supply_max_limit": SUPPLY_MAX_LIMIT,
         "discover_runs": discover_runs,
         "latest_subtopic_run_id_by_topic": latest_subtopic_run_id_by_topic,
         "topic_reviews": {
@@ -5355,11 +5409,17 @@ class ReviewUIApp:
                 discovery_run_id_raw = _normalize_text(
                     (query.get("discovery_run_id") or [None])[0]
                 )
+                supply_limit_raw = _normalize_text(
+                    (query.get("supply_limit") or [None])[0]
+                )
                 run_id = int(run_id_raw) if run_id_raw is not None else None
                 discovery_run_id = (
                     int(discovery_run_id_raw)
                     if discovery_run_id_raw is not None
                     else None
+                )
+                supply_limit = (
+                    int(supply_limit_raw) if supply_limit_raw is not None else None
                 )
                 payload = build_state_payload(
                     self.db_path,
@@ -5368,6 +5428,7 @@ class ReviewUIApp:
                     subtopic_name=subtopic_name,
                     sample_limit=self.sample_limit,
                     discovery_run_id=discovery_run_id,
+                    supply_limit=supply_limit,
                 )
                 return self._json_response(start_response, payload)
             if method == "POST" and path.startswith("/api/"):

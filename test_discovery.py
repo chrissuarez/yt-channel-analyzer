@@ -6393,5 +6393,124 @@ class ChannelEditEndpointTests(unittest.TestCase):
         self.assertIn("reingest", UI_REVISION)
 
 
+def _seed_channel_with_n_videos(db_path: Path, count: int) -> None:
+    init_db(
+        db_path,
+        project_name="proj",
+        channel_id="UC123",
+        channel_title="Channel",
+        channel_handle="@channel",
+    )
+    upsert_videos_for_primary_channel(
+        db_path,
+        videos=[
+            VideoMetadata(
+                youtube_video_id=f"vid{i:03d}",
+                title=f"Video {i:03d}",
+                description="desc",
+                published_at=f"2026-01-{(i % 28) + 1:02d}T12:00:00Z",
+                thumbnail_url=None,
+            )
+            for i in range(count)
+        ],
+    )
+
+
+class SupplyPaginationTests(unittest.TestCase):
+    """`build_state_payload` accepts an optional `supply_limit` and clamps it
+    to [1, SUPPLY_MAX_LIMIT]; `/api/state?supply_limit=N` plumbs through; the
+    Supply page renders a Load-more button when more videos exist."""
+
+    def test_default_limit_caps_supply_videos_at_50(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_n_videos(db_path, 75)
+
+            payload = build_state_payload(db_path)
+            self.assertEqual(len(payload["supply_videos"]), 50)
+            self.assertEqual(payload["supply_limit"], 50)
+
+    def test_supply_limit_param_returns_more(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_n_videos(db_path, 120)
+
+            payload = build_state_payload(db_path, supply_limit=100)
+            self.assertEqual(len(payload["supply_videos"]), 100)
+            self.assertEqual(payload["supply_limit"], 100)
+
+    def test_supply_limit_clamps_below_one(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_n_videos(db_path, 10)
+
+            payload = build_state_payload(db_path, supply_limit=0)
+            self.assertEqual(payload["supply_limit"], 1)
+            self.assertEqual(len(payload["supply_videos"]), 1)
+
+    def test_supply_limit_clamps_to_max(self) -> None:
+        from yt_channel_analyzer.review_ui import (
+            SUPPLY_MAX_LIMIT,
+            build_state_payload,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_n_videos(db_path, 5)
+
+            payload = build_state_payload(db_path, supply_limit=10_000)
+            self.assertEqual(payload["supply_limit"], SUPPLY_MAX_LIMIT)
+            self.assertEqual(payload["supply_max_limit"], SUPPLY_MAX_LIMIT)
+
+    def test_state_endpoint_parses_supply_limit_query(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_n_videos(db_path, 75)
+
+            app = ReviewUIApp(db_path)
+            environ = {
+                "REQUEST_METHOD": "GET",
+                "PATH_INFO": "/api/state",
+                "QUERY_STRING": "supply_limit=60",
+                "wsgi.input": io.BytesIO(b""),
+            }
+            captured: dict[str, object] = {}
+
+            def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+                captured["status"] = status
+
+            body_bytes = b"".join(app(environ, start_response))
+            self.assertEqual(captured["status"], "200 OK")
+            payload = json.loads(body_bytes.decode("utf-8"))
+            self.assertEqual(payload["supply_limit"], 60)
+            self.assertEqual(len(payload["supply_videos"]), 60)
+
+    def test_load_more_button_html_wired(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("supply-load-more", html)
+        self.assertIn("loadMoreSupply", html)
+        self.assertIn("supplyLimit", html)
+        self.assertIn("supply_limit", html)
+
+    def test_ui_revision_advances_for_supply_pagination(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("supply-pagination", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("edit-channel", UI_REVISION)
+        self.assertIn("run-discovery", UI_REVISION)
+        self.assertIn("reingest", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

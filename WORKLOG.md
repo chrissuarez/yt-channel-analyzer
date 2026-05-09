@@ -1951,3 +1951,18 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 - 7 new tests in `ChannelEditEndpointTests`: happy path, blank handle/description persist as NULL, missing-title 400, blank-title 400, no-primary-channel 400, HTML wiring, UI_REVISION substring preservation.
 - `UI_REVISION` bumped to `2026-05-10.10-edit-channel-form-…` preserving prior substrings (run-discovery, reingest, discover-cost, comparison-readiness, channel-overview).
 - Verify gate: 260 tests green (+7).
+
+## 2026-05-10 — Supply pagination (Load-more button)
+
+- New constants `SUPPLY_DEFAULT_LIMIT = 50` and `SUPPLY_MAX_LIMIT = 500` in `review_ui.py`.
+- `build_state_payload(..., supply_limit=None)` — accepts optional kwarg, clamps to `[1, SUPPLY_MAX_LIMIT]`, passes through to `_build_supply_videos(limit=...)`. Echoes `supply_limit` (effective) and `supply_max_limit` in the payload so JS can decide when to render Load-more.
+- `/api/state?supply_limit=N` — parsed alongside the existing `?run_id=` / `?topic=` / `?subtopic=` / `?discovery_run_id=` query params.
+- JS: `state.supplyLimit = 50` initial; `fetchState()` appends `&supply_limit=N`; Supply footer renders a `Load more` button (`#supply-load-more`) when `total > shown` and shown < cap. Click bumps `state.supplyLimit` by 50 (clamped to total + max), refetches. When cap reached with more available, footer shows `cap of 500 reached` instead. Replaces the previous "extend the limit in `_build_supply_videos`" code-pointer hint.
+- New CSS: `.supply-load-more` (paper/ink palette, mono font, hover/disabled states).
+- 7 new tests in `SupplyPaginationTests`: default-cap-50, custom-limit, lower-clamp (0 → 1), upper-clamp (10000 → 500), `/api/state?supply_limit=` query parsing, button-HTML wiring, `UI_REVISION` substring preservation.
+- `UI_REVISION` bumped to `2026-05-10.11-supply-pagination-…` preserving prior substrings.
+- Verify gate: 267 tests green (+7).
+
+### Next
+- Optional: stream/poll in-flight discovery status — modal still sits frozen during the synchronous request.
+- Optional: server-side sort for Supply (currently client-side `.reverse()` in JS, so `oldest` shows the oldest of the most-recent-N rather than the channel's true oldest).
