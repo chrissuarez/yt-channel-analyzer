@@ -1624,6 +1624,29 @@ def upsert_channel_metadata(
     return channel_id
 
 
+def update_channel_fields(
+    db_path: str | Path,
+    *,
+    channel_id: int,
+    title: str,
+    handle: str | None,
+    description: str | None,
+) -> None:
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.execute(
+            """
+            UPDATE channels
+            SET title = ?, handle = ?, description = ?
+            WHERE id = ?
+            """,
+            (title, handle, description, channel_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError(f"no channel with id {channel_id}")
+        connection.commit()
+
+
 def get_primary_channel(db_path: str | Path) -> PrimaryChannelRecord:
     with connect(db_path) as connection:
         ensure_schema(connection)

@@ -56,6 +56,7 @@ from yt_channel_analyzer.db import (
     summarize_comparison_group_suggestion_labels,
     summarize_subtopic_suggestion_labels,
     summarize_topic_suggestion_labels,
+    update_channel_fields,
     upsert_channel_metadata,
     upsert_videos_for_primary_channel,
 )
@@ -72,7 +73,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.9-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.10-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 DISCOVER_MODES = ("stub", "real")
@@ -2088,6 +2089,35 @@ HTML_PAGE = """<!doctype html>
       opacity: 0.55;
       cursor: not-allowed;
     }
+    .modal-card .modal-form { display: flex; flex-direction: column; gap: 12px; margin: 14px 0 4px; }
+    .modal-card .modal-form label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-family: var(--body);
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .modal-card .modal-form input,
+    .modal-card .modal-form textarea {
+      font-family: var(--body);
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--ink);
+      background: var(--paper);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      padding: 8px 10px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .modal-card .modal-form textarea { resize: vertical; min-height: 84px; }
+    .modal-card .modal-form input:focus,
+    .modal-card .modal-form textarea:focus { outline: 2px solid var(--teal); outline-offset: -1px; }
+    .modal-card .modal-hint { font-size: 12px; color: var(--ink-soft); margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -2395,6 +2425,29 @@ HTML_PAGE = """<!doctype html>
       <div class="modal-actions">
         <button type="button" class="modal-cancel" id="discover-confirm-cancel">Cancel</button>
         <button type="button" class="modal-confirm" id="discover-confirm-go">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="channel-edit-modal" role="dialog" aria-modal="true" aria-labelledby="channel-edit-title" hidden>
+    <div class="modal-card">
+      <h3 id="channel-edit-title">Edit channel</h3>
+      <p>Override the display values for this channel. YouTube ID, thumbnail, and published date stay locked to the source.</p>
+      <form class="modal-form" id="channel-edit-form" autocomplete="off">
+        <label>Title
+          <input type="text" id="channel-edit-title-input" required maxlength="200" />
+        </label>
+        <label>Handle
+          <input type="text" id="channel-edit-handle-input" maxlength="100" placeholder="@channel" />
+        </label>
+        <label>Description
+          <textarea id="channel-edit-description-input" rows="4" maxlength="2000"></textarea>
+        </label>
+      </form>
+      <p class="modal-hint">Re-ingest will overwrite these with the latest YouTube values.</p>
+      <div class="modal-actions">
+        <button type="button" class="modal-cancel" id="channel-edit-cancel">Cancel</button>
+        <button type="button" class="modal-confirm" id="channel-edit-go">Save</button>
       </div>
     </div>
   </div>
@@ -3597,7 +3650,75 @@ HTML_PAGE = """<!doctype html>
         });
       }
       const edit = document.getElementById('supply-edit-btn');
-      if (edit) edit.addEventListener('click', () => setStatus('Channel editing is CLI-only for now — edit the channels row and re-render.', true));
+      if (edit) edit.addEventListener('click', () => openChannelEdit());
+    }
+
+    function openChannelEdit() {
+      const supply = state.payload?.supply_channel;
+      const modal = document.getElementById('channel-edit-modal');
+      const titleInput = document.getElementById('channel-edit-title-input');
+      const handleInput = document.getElementById('channel-edit-handle-input');
+      const descInput = document.getElementById('channel-edit-description-input');
+      const goBtn = document.getElementById('channel-edit-go');
+      if (!modal || !titleInput || !handleInput || !descInput || !goBtn) return;
+      if (!supply) {
+        setStatus('No channel loaded yet.', true);
+        return;
+      }
+      titleInput.value = supply.title || '';
+      handleInput.value = supply.handle || '';
+      descInput.value = supply.description || '';
+      goBtn.disabled = false;
+      goBtn.textContent = 'Save';
+      modal.hidden = false;
+      modal.setAttribute('data-open', 'true');
+      titleInput.focus();
+    }
+
+    function closeChannelEdit() {
+      const modal = document.getElementById('channel-edit-modal');
+      if (!modal) return;
+      modal.hidden = true;
+      modal.removeAttribute('data-open');
+    }
+
+    async function submitChannelEdit() {
+      const goBtn = document.getElementById('channel-edit-go');
+      const cancelBtn = document.getElementById('channel-edit-cancel');
+      const titleInput = document.getElementById('channel-edit-title-input');
+      const handleInput = document.getElementById('channel-edit-handle-input');
+      const descInput = document.getElementById('channel-edit-description-input');
+      if (!goBtn || !titleInput) return;
+      const title = (titleInput.value || '').trim();
+      if (!title) {
+        setStatus('Channel title is required.', true);
+        titleInput.focus();
+        return;
+      }
+      goBtn.disabled = true;
+      goBtn.textContent = 'Saving…';
+      if (cancelBtn) cancelBtn.disabled = true;
+      setStatus('Saving channel edits…');
+      try {
+        const payload = await postJson('/api/channel/edit', {
+          title,
+          handle: (handleInput.value || '').trim(),
+          description: (descInput.value || '').trim(),
+        });
+        setStatus(payload.message || 'Channel updated.');
+        closeChannelEdit();
+        await fetchState({
+          runId: state.payload?.run_id,
+          topic: state.payload?.subtopic_reviews?.selected_topic || null,
+          subtopic: state.payload?.comparison_reviews?.selected_subtopic || null,
+        });
+      } catch (error) {
+        setStatus(error.message || 'Channel edit failed.', true);
+      } finally {
+        goBtn.disabled = false;
+        goBtn.textContent = 'Save';
+        if (cancelBtn) cancelBtn.disabled = false;
+      }
     }
 
     function transcriptPill(status) {
@@ -4130,10 +4251,21 @@ HTML_PAGE = """<!doctype html>
     document.getElementById('discover-confirm-modal').addEventListener('click', (event) => {
       if (event.target.id === 'discover-confirm-modal') closeDiscoverConfirm();
     });
+    document.getElementById('channel-edit-cancel').addEventListener('click', () => closeChannelEdit());
+    document.getElementById('channel-edit-go').addEventListener('click', () => submitChannelEdit());
+    document.getElementById('channel-edit-modal').addEventListener('click', (event) => {
+      if (event.target.id === 'channel-edit-modal') closeChannelEdit();
+    });
+    document.getElementById('channel-edit-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      submitChannelEdit();
+    });
     document.addEventListener('keydown', (event) => {
       if (event.key !== 'Escape') return;
-      const modal = document.getElementById('discover-confirm-modal');
-      if (modal && modal.getAttribute('data-open') === 'true') closeDiscoverConfirm();
+      const discoverModal = document.getElementById('discover-confirm-modal');
+      if (discoverModal && discoverModal.getAttribute('data-open') === 'true') closeDiscoverConfirm();
+      const editModal = document.getElementById('channel-edit-modal');
+      if (editModal && editModal.getAttribute('data-open') === 'true') closeChannelEdit();
     });
 
     fetchState().catch((error) => setStatus(error.message, true));
@@ -5253,6 +5385,8 @@ class ReviewUIApp:
             return self._reingest(body)
         if path == "/api/discover":
             return self._discover(body)
+        if path == "/api/channel/edit":
+            return self._channel_edit(body)
         run_id_raw = body.get("run_id")
         run_id = int(run_id_raw) if run_id_raw not in (None, "") else None
         if path == "/api/generate/topics":
@@ -5744,6 +5878,38 @@ class ReviewUIApp:
             "video_count": stored_count,
             "last_refreshed_at": last_refreshed_at,
             "message": f"Re-ingested '{channel_title}': stored {stored_count} video(s).",
+        }
+
+    def _channel_edit(self, body: dict[str, Any]) -> dict[str, Any]:
+        title = _normalize_text(body.get("title")) if isinstance(body, dict) else None
+        if title is None:
+            raise ReviewUIError("missing required field: title")
+        handle = _normalize_text(body.get("handle")) if isinstance(body, dict) else None
+        description = (
+            _normalize_text(body.get("description"))
+            if isinstance(body, dict)
+            else None
+        )
+
+        primary_channel = get_primary_channel(self.db_path)
+        update_channel_fields(
+            self.db_path,
+            channel_id=primary_channel.channel_id,
+            title=title,
+            handle=handle,
+            description=description,
+        )
+
+        supply = _build_supply_channel(
+            self.db_path, channel_id=primary_channel.channel_id
+        )
+        return {
+            "ok": True,
+            "channel_title": (supply["title"] if supply else None) or title,
+            "youtube_channel_id": primary_channel.youtube_channel_id,
+            "handle": supply["handle"] if supply else handle,
+            "description": supply["description"] if supply else description,
+            "message": f"Updated channel '{title}'.",
         }
 
     def _discover(self, body: dict[str, Any]) -> dict[str, Any]:

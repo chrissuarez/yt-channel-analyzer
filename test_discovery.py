@@ -6234,5 +6234,164 @@ class DiscoverEndpointTests(unittest.TestCase):
         self.assertIn("discover-cost", UI_REVISION)
 
 
+class ChannelEditEndpointTests(unittest.TestCase):
+    """`POST /api/channel/edit` updates the primary channel's display fields
+    (title, handle, description). YouTube-derived fields stay untouched."""
+
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def test_edit_updates_title_handle_description(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app,
+                "POST",
+                "/api/channel/edit",
+                body={
+                    "title": "Friendlier Name",
+                    "handle": "@friendly",
+                    "description": "Curated description.",
+                },
+            )
+
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["channel_title"], "Friendlier Name")
+            self.assertEqual(payload["handle"], "@friendly")
+            self.assertEqual(payload["description"], "Curated description.")
+            self.assertEqual(payload["youtube_channel_id"], "UC123")
+            self.assertIn("Updated channel", payload["message"])
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT title, handle, description, youtube_channel_id "
+                    "FROM channels WHERE youtube_channel_id = ?",
+                    ("UC123",),
+                ).fetchone()
+            self.assertEqual(row["title"], "Friendlier Name")
+            self.assertEqual(row["handle"], "@friendly")
+            self.assertEqual(row["description"], "Curated description.")
+            self.assertEqual(row["youtube_channel_id"], "UC123")
+
+    def test_edit_blank_handle_and_description_persist_as_null(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, _body = self._call_app(
+                app,
+                "POST",
+                "/api/channel/edit",
+                body={"title": "Just Title", "handle": "", "description": "   "},
+            )
+            self.assertEqual(status, "200 OK")
+
+            with connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT title, handle, description FROM channels WHERE youtube_channel_id = ?",
+                    ("UC123",),
+                ).fetchone()
+            self.assertEqual(row[0], "Just Title")
+            self.assertIsNone(row[1])
+            self.assertIsNone(row[2])
+
+    def test_edit_missing_title_returns_400(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/channel/edit", body={"handle": "@x"}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("title", payload["error"])
+
+    def test_edit_blank_title_returns_400(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/channel/edit", body={"title": "   "}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("title", payload["error"])
+
+    def test_edit_returns_400_when_no_primary_channel(self) -> None:
+        from yt_channel_analyzer.db import ensure_schema
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/channel/edit", body={"title": "X"}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("primary channel", payload["error"])
+
+    def test_edit_button_html_opens_edit_modal(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("supply-edit-btn", html)
+        self.assertIn("channel-edit-modal", html)
+        self.assertIn("/api/channel/edit", html)
+        self.assertIn("openChannelEdit", html)
+
+    def test_ui_revision_advances_for_edit_channel(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("edit-channel", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("run-discovery", UI_REVISION)
+        self.assertIn("reingest", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()
