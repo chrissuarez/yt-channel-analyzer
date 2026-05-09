@@ -117,7 +117,7 @@ PYTHONPATH=. python3 -m yt_channel_analyzer.cli serve-review-ui \
   --db-path ./tmp/doac.sqlite
 ```
 
-Default bind is `127.0.0.1:8000`. The Discovery view lists topics with
+Default bind is `127.0.0.1:8765`. The Discovery view lists topics with
 episode counts; expand a topic to see its subtopics with per-subtopic
 counts; expand a subtopic to see assigned episodes with confidence,
 reason, and thumbnail.
