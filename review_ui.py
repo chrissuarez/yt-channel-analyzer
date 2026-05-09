@@ -256,8 +256,8 @@ HTML_PAGE = """<!doctype html>
       content: "";
       position: absolute;
       top: 22px;
-      left: 52px;
-      right: 16px;
+      left: 22px;
+      right: -22px;
       height: 0.5px;
       background: var(--rule);
       z-index: 0;
@@ -305,6 +305,10 @@ HTML_PAGE = """<!doctype html>
       display: inline-flex;
       flex-direction: column;
       margin-left: 12px;
+      position: relative;
+      z-index: 1;
+      background: var(--paper);
+      padding: 0 8px 0 4px;
     }
     .step .label {
       font-family: var(--body);
