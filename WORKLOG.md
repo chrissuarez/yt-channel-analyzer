@@ -27,6 +27,15 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-10 — Wire Re-ingest button (Supply page)
+
+Supply-page Re-ingest button is no longer a toast: clicks now POST `/api/reingest`. Server endpoint reads the primary channel + project name (`get_primary_channel` + `_resolve_primary_project_name`), calls the YouTube fetchers, and upserts via `upsert_channel_metadata` + `upsert_videos_for_primary_channel`. Returns `{ok, channel_title, youtube_channel_id, video_count, last_refreshed_at, message}`. `ReviewUIApp.__init__` now takes optional `channel_metadata_fetcher` and `channel_videos_fetcher` kwargs (default to `youtube.fetch_channel_metadata` / `fetch_channel_videos`) so tests can stub without monkeypatching env — same dependency-injection shape as `discovery.run_discovery`'s `LLMCallable`. `YouTubeAPIError` is wrapped as `ReviewUIError` so the existing 400 handler surfaces a clean `Re-ingest failed: …` message; missing `YOUTUBE_API_KEY` flows through that same path. JS handler disables the button + swaps label to "Re-ingesting…", posts, on success calls `fetchState()` to refresh the Supply numbers + `last_refreshed_at` line, on error sets status. Optional `limit` body field clamped to `[1, 50]` (the YouTube API page max). `UI_REVISION` bumped to `2026-05-10.8-reingest-button-wired-…`. 9 new tests in `ReingestEndpointTests` (happy path, DB persistence, limit clamp, metadata-error 400, videos-error 400, no-primary-channel 400, missing-API-key 400, button-HTML wired, UI_REVISION advance). Verify gate green at 241 (~54s). No real network in tests.
+
+### Next
+- Supply pagination (currently `limit=50` hard-coded in `_build_supply_videos`).
+- Wire `Edit channel` form (smaller slice).
+- Wire `Run discovery` button (needs `RALPH_ALLOW_REAL_LLM=1` server-side check + confirm modal).
+
 ## 2026-05-10 — Discover row → Review (run selector)
 
 Discover history rows are now clickable: click a successful run → switches `activeStage` to `'review'`, sets `state.activeDiscoveryRunId`, refetches. `_build_discovery_topic_map` accepts optional `run_id=` (defaults to latest as before); `build_state_payload` adds `discovery_run_id=` kwarg; `/api/state` parses `?discovery_run_id=`. JS `fetchState()` appends the param when set; `selectDiscoveryRun()` clears focused topic/subtopic so user lands on the overview for the chosen run. Active row marked via `is-active` class against the actually-loaded `discovery_topic_map.run_id` (so latest stays highlighted by default). Errored runs show a status-bar warning instead of loading. Row gets pointer cursor + hover tint + role=button + Enter/Space handler. CSS: row padding `20px 0` → `20px 12px` with `-12px` margin so the hover/active background bleeds into the gutter for readability. `UI_REVISION` bumped to `2026-05-10.7-discover-row-selects-run-discover-cost-…`. New test `test_state_payload_discovery_run_id_selects_specific_run` covers default-latest, specific-id, and missing-id paths. Verify gate green at 232 (~52s).

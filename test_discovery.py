@@ -5832,5 +5832,255 @@ class DiscoverRunsCostRollupTests(unittest.TestCase):
         self.assertIn("discovery", UI_REVISION)
 
 
+class ReingestEndpointTests(unittest.TestCase):
+    """`POST /api/reingest` re-fetches channel + video metadata via the
+    injected fetchers and upserts both.  YouTube errors surface as 400s."""
+
+    def _call_app(
+        self,
+        app,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> tuple[str, str]:
+        payload = json.dumps(body).encode("utf-8") if body is not None else b""
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(payload)),
+            "CONTENT_TYPE": "application/json",
+            "wsgi.input": io.BytesIO(payload),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _make_metadata(self, *, title: str = "Updated Channel") -> ChannelMetadata:
+        return ChannelMetadata(
+            youtube_channel_id="UC123",
+            title=title,
+            description="updated desc",
+            custom_url="@channel",
+            published_at="2026-01-01T00:00:00Z",
+            thumbnail_url="https://example.invalid/thumb.jpg",
+        )
+
+    def _make_videos(self, count: int = 3) -> list[VideoMetadata]:
+        return [
+            VideoMetadata(
+                youtube_video_id=f"new{i}",
+                title=f"Fresh video {i}",
+                description=f"desc {i}",
+                published_at=f"2026-05-{i + 1:02d}T12:00:00Z",
+                thumbnail_url=None,
+            )
+            for i in range(count)
+        ]
+
+    def test_reingest_returns_ok_with_stubbed_fetchers(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            captured_calls: dict[str, object] = {}
+
+            def metadata_fetcher(channel_id: str) -> ChannelMetadata:
+                captured_calls["metadata_channel_id"] = channel_id
+                return self._make_metadata()
+
+            def videos_fetcher(channel_id: str, *, limit: int) -> list[VideoMetadata]:
+                captured_calls["videos_channel_id"] = channel_id
+                captured_calls["videos_limit"] = limit
+                return self._make_videos(3)
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=metadata_fetcher,
+                channel_videos_fetcher=videos_fetcher,
+            )
+            status, body = self._call_app(app, "POST", "/api/reingest", body={})
+
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["video_count"], 3)
+            self.assertEqual(payload["channel_title"], "Updated Channel")
+            self.assertEqual(payload["youtube_channel_id"], "UC123")
+            self.assertIsNotNone(payload["last_refreshed_at"])
+            self.assertIn("Re-ingested", payload["message"])
+            self.assertEqual(captured_calls["metadata_channel_id"], "UC123")
+            self.assertEqual(captured_calls["videos_channel_id"], "UC123")
+            self.assertEqual(captured_calls["videos_limit"], 50)
+
+    def test_reingest_persists_updated_channel_and_video_rows(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=lambda _: self._make_metadata(
+                    title="Renamed By Reingest"
+                ),
+                channel_videos_fetcher=lambda _id, *, limit: self._make_videos(2),
+            )
+            status, _body = self._call_app(app, "POST", "/api/reingest", body={})
+            self.assertEqual(status, "200 OK")
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                channel = conn.execute(
+                    "SELECT title, last_refreshed_at FROM channels WHERE youtube_channel_id = ?",
+                    ("UC123",),
+                ).fetchone()
+                self.assertEqual(channel["title"], "Renamed By Reingest")
+                self.assertIsNotNone(channel["last_refreshed_at"])
+
+                video_ids = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT youtube_video_id FROM videos"
+                    ).fetchall()
+                }
+                self.assertIn("new0", video_ids)
+                self.assertIn("new1", video_ids)
+                # seeded videos remain — upsert is additive
+                self.assertIn("vid1", video_ids)
+                self.assertIn("vid2", video_ids)
+
+    def test_reingest_clamps_oversized_limit_to_default(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp, REINGEST_DEFAULT_LIMIT
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            seen_limits: list[int] = []
+
+            def videos_fetcher(channel_id: str, *, limit: int) -> list[VideoMetadata]:
+                seen_limits.append(limit)
+                return []
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=lambda _: self._make_metadata(),
+                channel_videos_fetcher=videos_fetcher,
+            )
+            status, _body = self._call_app(
+                app, "POST", "/api/reingest", body={"limit": 500}
+            )
+            self.assertEqual(status, "200 OK")
+            self.assertEqual(seen_limits, [REINGEST_DEFAULT_LIMIT])
+
+    def test_reingest_returns_400_when_metadata_fetcher_raises(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+        from yt_channel_analyzer.youtube import YouTubeAPIError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            def metadata_fetcher(_channel_id: str) -> ChannelMetadata:
+                raise YouTubeAPIError("channel not found: UC123")
+
+            def videos_fetcher(*_args, **_kwargs) -> list[VideoMetadata]:
+                self.fail("videos fetcher should not be called when metadata fails")
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=metadata_fetcher,
+                channel_videos_fetcher=videos_fetcher,
+            )
+            status, body = self._call_app(app, "POST", "/api/reingest", body={})
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("Re-ingest failed", payload["error"])
+            self.assertIn("channel not found", payload["error"])
+
+    def test_reingest_returns_400_when_videos_fetcher_raises(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+        from yt_channel_analyzer.youtube import YouTubeAPIError
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            def videos_fetcher(*_args, **_kwargs) -> list[VideoMetadata]:
+                raise YouTubeAPIError("uploads playlist not found for channel: UC123")
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=lambda _: self._make_metadata(),
+                channel_videos_fetcher=videos_fetcher,
+            )
+            status, body = self._call_app(app, "POST", "/api/reingest", body={})
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("Re-ingest failed", payload["error"])
+            self.assertIn("uploads playlist not found", payload["error"])
+
+    def test_reingest_returns_400_when_no_primary_channel(self) -> None:
+        from yt_channel_analyzer.db import ensure_schema
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+
+            app = ReviewUIApp(
+                db_path,
+                channel_metadata_fetcher=lambda _: self._make_metadata(),
+                channel_videos_fetcher=lambda _id, *, limit: [],
+            )
+            status, body = self._call_app(app, "POST", "/api/reingest", body={})
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("primary channel", payload["error"])
+
+    def test_reingest_default_fetcher_surfaces_missing_api_key(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            with mock.patch.dict(os.environ, {}, clear=True):
+                app = ReviewUIApp(db_path)
+                status, body = self._call_app(
+                    app, "POST", "/api/reingest", body={}
+                )
+            self.assertEqual(status, "400 Bad Request")
+            payload = json.loads(body)
+            self.assertIn("YOUTUBE_API_KEY", payload["error"])
+
+    def test_reingest_button_html_calls_api_endpoint(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("supply-reingest-btn", html)
+        self.assertIn("/api/reingest", html)
+        self.assertIn("Re-ingesting", html)
+
+    def test_ui_revision_advances_for_reingest(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("reingest", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("discover-cost", UI_REVISION)
+        self.assertIn("comparison-readiness", UI_REVISION)
+        self.assertIn("channel-overview", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -55,15 +55,25 @@ from yt_channel_analyzer.db import (
     summarize_comparison_group_suggestion_labels,
     summarize_subtopic_suggestion_labels,
     summarize_topic_suggestion_labels,
+    upsert_channel_metadata,
+    upsert_videos_for_primary_channel,
 )
 from yt_channel_analyzer.legacy.comparison_group_suggestions import suggest_comparison_groups_for_video
 from yt_channel_analyzer.subtopic_suggestions import suggest_subtopics_for_video
 from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
+from yt_channel_analyzer.youtube import (
+    ChannelMetadata,
+    VideoMetadata,
+    YouTubeAPIError,
+    fetch_channel_metadata as _real_fetch_channel_metadata,
+    fetch_channel_videos as _real_fetch_channel_videos,
+)
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.7-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.8-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
+REINGEST_DEFAULT_LIMIT = 50
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
 LOW_CONFIDENCE_THRESHOLD_ENV_VAR = "YTA_LOW_CONFIDENCE_THRESHOLD"
@@ -3482,7 +3492,29 @@ HTML_PAGE = """<!doctype html>
         </div>
       `;
       const reingest = document.getElementById('supply-reingest-btn');
-      if (reingest) reingest.addEventListener('click', () => setStatus('Re-ingest is CLI-only for now — run: yt-channel-analyzer ingest <project>', true));
+      if (reingest) {
+        reingest.addEventListener('click', async () => {
+          if (reingest.disabled) return;
+          const originalLabel = reingest.textContent;
+          reingest.disabled = true;
+          reingest.textContent = 'Re-ingesting…';
+          setStatus('Re-ingesting channel metadata and videos…');
+          try {
+            const payload = await postJson('/api/reingest', {});
+            setStatus(payload.message || 'Re-ingest complete.');
+            await fetchState({
+              runId: state.payload?.run_id,
+              topic: state.payload?.subtopic_reviews?.selected_topic || null,
+              subtopic: state.payload?.comparison_reviews?.selected_subtopic || null,
+            });
+          } catch (error) {
+            setStatus(error.message || 'Re-ingest failed.', true);
+          } finally {
+            reingest.disabled = false;
+            reingest.textContent = originalLabel;
+          }
+        });
+      }
       const edit = document.getElementById('supply-edit-btn');
       if (edit) edit.addEventListener('click', () => setStatus('Channel editing is CLI-only for now — edit the channels row and re-render.', true));
     }
@@ -4962,9 +4994,18 @@ def build_state_payload(
 
 
 class ReviewUIApp:
-    def __init__(self, db_path: str | Path, *, sample_limit: int = 3) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        sample_limit: int = 3,
+        channel_metadata_fetcher: Any = None,
+        channel_videos_fetcher: Any = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.sample_limit = sample_limit
+        self._channel_metadata_fetcher = channel_metadata_fetcher or _real_fetch_channel_metadata
+        self._channel_videos_fetcher = channel_videos_fetcher or _real_fetch_channel_videos
 
     def __call__(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -5006,6 +5047,8 @@ class ReviewUIApp:
             return self._json_response(start_response, {"error": f"Internal server error: {exc}"}, status="500 Internal Server Error")
 
     def _handle_post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        if path == "/api/reingest":
+            return self._reingest(body)
         run_id_raw = body.get("run_id")
         run_id = int(run_id_raw) if run_id_raw not in (None, "") else None
         if path == "/api/generate/topics":
@@ -5456,6 +5499,47 @@ class ReviewUIApp:
             "topic": topic_name,
             "subtopic": subtopic_name,
             "message": f"Generated comparison-group suggestions for {len(rows)} video(s) under '{topic_name} / {subtopic_name}' in run {run_id} using {model_name}. Stored {stored_count} suggestion row(s).",
+        }
+
+    def _reingest(self, body: dict[str, Any]) -> dict[str, Any]:
+        limit_raw = body.get("limit") if isinstance(body, dict) else None
+        if limit_raw in (None, ""):
+            limit = REINGEST_DEFAULT_LIMIT
+        else:
+            try:
+                limit = int(limit_raw)
+            except (TypeError, ValueError) as exc:
+                raise ReviewUIError(f"invalid limit: {limit_raw!r}") from exc
+            if limit < 1:
+                raise ReviewUIError("limit must be >= 1")
+            limit = min(limit, REINGEST_DEFAULT_LIMIT)
+
+        primary_channel = get_primary_channel(self.db_path)
+        project_name = _resolve_primary_project_name(self.db_path)
+        try:
+            metadata = self._channel_metadata_fetcher(primary_channel.youtube_channel_id)
+            upsert_channel_metadata(
+                self.db_path,
+                project_name=project_name,
+                metadata=metadata,
+            )
+            videos = self._channel_videos_fetcher(
+                primary_channel.youtube_channel_id, limit=limit
+            )
+            stored_count = upsert_videos_for_primary_channel(self.db_path, videos=videos)
+        except YouTubeAPIError as exc:
+            raise ReviewUIError(f"Re-ingest failed: {exc}") from exc
+
+        supply = _build_supply_channel(self.db_path, channel_id=primary_channel.channel_id)
+        last_refreshed_at = supply["last_refreshed_at"] if supply else None
+        channel_title = (supply["title"] if supply else None) or metadata.title
+        return {
+            "ok": True,
+            "channel_title": channel_title,
+            "youtube_channel_id": primary_channel.youtube_channel_id,
+            "video_count": stored_count,
+            "last_refreshed_at": last_refreshed_at,
+            "message": f"Re-ingested '{channel_title}': stored {stored_count} video(s).",
         }
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
