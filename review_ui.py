@@ -92,45 +92,261 @@ HTML_PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>YT Channel Analyzer Review UI</title>
+  <title>YouTube Analyser</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..600;1,8..60,400..600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #0b1020;
-      --panel: #141b2d;
-      --panel-2: #1a2338;
-      --text: #eef2ff;
-      --muted: #a8b3cf;
-      --accent: #7dd3fc;
-      --good: #86efac;
-      --warn: #fbbf24;
-      --bad: #fca5a5;
-      --border: #2b3550;
+      color-scheme: light;
+      /* Design tokens — YT_Analyzer_Design_Spec */
+      --paper: #FAF8F2;
+      --surface: #ffffff;
+      --ink: #2C2C2A;
+      --ink-soft: #888780;
+      --ink-mute: #B5B2A6;
+      --rule: #D3D1C7;
+      --rule-soft: #E5E2D8;
+      --tag-bg: #F1EFE8;
+      --teal: #0F6E56;
+      --teal-tint: #E1F5EE;
+      --blue: #185FA5;
+      --blue-tint: #E5EEF7;
+      --coral: #D85A30;
+      --coral-tint: #FAECE7;
+
+      --display: "Source Serif 4", "Source Serif Pro", Georgia, serif;
+      --body: "Poppins", system-ui, -apple-system, sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+      --hairline: 0.5px solid var(--rule);
+
+      /* Compatibility aliases for legacy class definitions */
+      --bg: var(--paper);
+      --panel: var(--surface);
+      --panel-2: var(--tag-bg);
+      --text: var(--ink);
+      --muted: var(--ink-soft);
+      --accent: var(--blue);     /* primary action / links */
+      --good: var(--teal);
+      --warn: var(--coral);      /* active emphasis */
+      --bad: #991b1b;
+      --border: var(--rule);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-      background: linear-gradient(180deg, #09101f 0%, #0b1020 100%);
-      color: var(--text);
+      font-family: var(--body);
+      font-weight: 400;
+      font-size: 16px;
+      line-height: 1.5;
+      background: var(--paper);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    h1, h2, h3, h4 {
+      margin: 0;
+      font-family: var(--display);
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      line-height: 1.2;
+    }
+    h1 { font-size: 28px; }
+    h2 { font-size: 22px; }
+    h3 { font-size: 18px; }
+    em, i { font-style: italic; }
+    code, .mono {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.02em;
     }
     .wrap {
       max-width: 1400px;
       margin: 0 auto;
-      padding: 24px;
+      padding: 0;
     }
-    .topbar, .panel {
-      background: rgba(20, 27, 45, 0.92);
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.22);
-    }
+
+    /* Top bar — wordmark + channel pill */
     .topbar {
-      padding: 20px;
-      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 48px;
+      border-bottom: var(--hairline);
+      background: var(--paper);
     }
+    .wordmark {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--body);
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+    }
+    .wordmark-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--teal);
+      border-radius: 999px;
+    }
+    .topbar-left { display: flex; align-items: center; gap: 24px; }
+    .topbar-right { display: flex; align-items: center; gap: 14px; }
+    .topbar .version {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-mute);
+      letter-spacing: 0.06em;
+    }
+    .channel-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 14px 6px 6px;
+      border: 0.5px solid var(--rule);
+      border-radius: 999px;
+      font-size: 13px;
+      background: var(--surface);
+    }
+    .channel-pill .av {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      background: var(--teal);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-family: var(--display);
+      font-size: 12px;
+      font-weight: 500;
+    }
+    .channel-pill .div {
+      width: 1px;
+      height: 12px;
+      background: var(--rule);
+    }
+    .channel-pill .yt-id {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-mute);
+    }
+
+    /* Stepper — 4 funnel stages */
+    .stepper {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0;
+      padding: 24px 48px 28px;
+      border-bottom: var(--hairline);
+      background: var(--paper);
+      position: relative;
+    }
+    .step {
+      position: relative;
+      padding-right: 32px;
+      text-align: left;
+      cursor: default;
+      display: flex;
+      align-items: center;
+      background: none;
+      border: 0;
+    }
+    .step:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      top: 22px;
+      left: 52px;
+      right: 16px;
+      height: 0.5px;
+      background: var(--rule);
+      z-index: 0;
+    }
+    .step .marker {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1;
+      background: var(--tag-bg);
+      color: var(--ink-soft);
+      font-family: var(--body);
+      font-size: 18px;
+      font-weight: 500;
+      flex-shrink: 0;
+    }
+    .step.done .marker { background: var(--teal-tint); color: var(--teal); }
+    .step.done .marker::after {
+      content: "";
+      width: 12px; height: 6px;
+      border-left: 2px solid var(--teal);
+      border-bottom: 2px solid var(--teal);
+      transform: rotate(-45deg) translate(0, -2px);
+    }
+    .step.act .marker { background: var(--coral-tint); color: var(--coral); }
+    .step.act .label, .step.act .sub { color: var(--coral); }
+    .step.act .marker::after {
+      content: "";
+      width: 10px; height: 10px;
+      background: var(--coral);
+      border-radius: 999px;
+    }
+    .step.idle .marker::after {
+      content: "";
+      width: 12px; height: 12px;
+      border: 2px solid var(--ink-soft);
+      border-radius: 999px;
+    }
+    .step.idle .label, .step.idle .sub { color: var(--ink-soft); }
+    .step .step-text {
+      display: inline-flex;
+      flex-direction: column;
+      margin-left: 12px;
+    }
+    .step .label {
+      font-family: var(--body);
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: -0.005em;
+      color: var(--ink);
+    }
+    .step .sub {
+      margin-top: 2px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.02em;
+      color: var(--ink-soft);
+    }
+
+    /* Stage frame */
+    .stage-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 40px 48px 96px;
+    }
+
+    /* Eyebrow / micro */
+    .eyebrow {
+      font-family: var(--body);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin-bottom: 8px;
+    }
+    .small { font-size: 13px; }
+    .soft { color: var(--ink-soft); }
+    .mute { color: var(--ink-mute); }
+    .accent { color: var(--coral); }
+    .good { color: var(--teal); }
+    .bad { color: var(--bad); }
+
     .title {
-      margin: 0 0 10px;
+      margin: 0 0 8px;
       font-size: 28px;
     }
     .revision-badge {
@@ -138,126 +354,160 @@ HTML_PAGE = """<!doctype html>
       align-items: center;
       gap: 6px;
       margin-left: 10px;
-      padding: 4px 8px;
-      border-radius: 999px;
-      border: 1px solid rgba(125, 211, 252, 0.35);
-      background: rgba(125, 211, 252, 0.08);
-      color: var(--accent);
-      font-size: 12px;
+      padding: 3px 9px;
+      border-radius: 8px;
+      background: var(--tag-bg);
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
       vertical-align: middle;
+      letter-spacing: 0.04em;
     }
-    .muted { color: var(--muted); }
+    .muted { color: var(--ink-soft); }
     .row {
       display: flex;
       flex-wrap: wrap;
       gap: 12px;
       align-items: center;
     }
-    .row.stretch {
-      align-items: stretch;
-    }
-    .controls {
-      margin-top: 16px;
-    }
+    .row.stretch { align-items: stretch; }
+    .controls { margin-top: 16px; }
     .context-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 12px;
       margin-top: 16px;
     }
     .context-card {
-      padding: 12px 14px;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.03);
+      padding: 14px 16px;
+      border-radius: 12px;
+      border: 0.5px solid var(--rule);
+      background: var(--surface);
     }
     .context-card .k {
       display: block;
-      font-size: 12px;
-      color: var(--muted);
+      font-family: var(--body);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
       margin-bottom: 6px;
     }
     .context-card strong {
       display: block;
       margin-bottom: 4px;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 18px;
+      color: var(--ink);
     }
     .generator {
-      margin-top: 16px;
-      padding-top: 16px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: var(--hairline);
     }
     .run-history-advanced {
       margin-top: 16px;
       padding-top: 12px;
-      border-top: 1px solid rgba(255,255,255,0.06);
+      border-top: var(--hairline);
     }
     .run-history-advanced > summary {
       cursor: pointer;
-      color: var(--muted);
-      font-size: 14px;
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 12px;
+      letter-spacing: 0.04em;
     }
-    .run-history-advanced .run-history-hint {
-      margin-top: 8px;
-    }
-    .run-history-advanced > label {
-      margin-top: 8px;
-      max-width: 320px;
-    }
+    .run-history-advanced .run-history-hint { margin-top: 8px; color: var(--ink-soft); }
+    .run-history-advanced > label { margin-top: 8px; max-width: 320px; }
     label {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      font-size: 14px;
-      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
     }
-    select, input, button {
-      font: inherit;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      background: var(--panel-2);
-      color: var(--text);
-      padding: 10px 12px;
+    select, input {
+      font-family: var(--body);
+      font-size: 14px;
+      font-weight: 400;
+      border-radius: 8px;
+      border: 0.5px solid var(--rule);
+      background: var(--surface);
+      color: var(--ink);
+      padding: 9px 12px;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px var(--blue-tint);
     }
     button {
+      font-family: var(--body);
+      font-size: 13px;
+      font-weight: 500;
       cursor: pointer;
-      transition: transform 0.05s ease, border-color 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border: 0.5px solid var(--rule);
+      background: transparent;
+      color: var(--ink);
+      border-radius: 8px;
+      white-space: nowrap;
+      transition: background 0.15s, border-color 0.15s;
     }
-    button:hover { border-color: var(--accent); }
+    button:hover { background: var(--tag-bg); border-color: var(--ink-soft); }
     button:active { transform: translateY(1px); }
-    button.good { border-color: rgba(134, 239, 172, 0.35); }
-    button.bad { border-color: rgba(252, 165, 165, 0.35); }
-    button.warn { border-color: rgba(251, 191, 36, 0.35); }
-    button.primary-action {
-      background: rgba(134, 239, 172, 0.12);
-      border-color: rgba(134, 239, 172, 0.62);
-      color: var(--good);
-      font-weight: 700;
+    button.primary-action,
+    button.btn-primary {
+      background: var(--blue);
+      color: #fff;
+      border-color: var(--blue);
+      font-weight: 500;
     }
-    button.secondary { background: transparent; }
-    .topic-map {
-      margin: 20px 0;
-      padding: 18px;
-      border: 1px solid rgba(125, 211, 252, 0.18);
-      border-radius: 18px;
-      background:
-        radial-gradient(circle at top left, rgba(125, 211, 252, 0.12), transparent 32%),
-        rgba(20, 27, 45, 0.78);
-      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.22);
+    button.primary-action:hover,
+    button.btn-primary:hover { background: #144D87; border-color: #144D87; }
+    button.good { color: var(--teal); border-color: var(--teal-tint); background: var(--teal-tint); }
+    button.bad { color: var(--bad); border-color: rgba(153,27,27,0.20); background: rgba(153,27,27,0.06); }
+    button.warn { color: var(--coral); border-color: var(--coral-tint); background: var(--coral-tint); }
+    button.secondary {
+      background: transparent;
+      color: var(--ink-soft);
+      border-color: transparent;
     }
-    .topic-map.discovery-topic-map {
-      border-color: rgba(134, 239, 172, 0.22);
-      background:
-        radial-gradient(circle at top left, rgba(134, 239, 172, 0.10), transparent 32%),
-        rgba(20, 27, 45, 0.78);
+    button.secondary:hover { color: var(--ink); background: var(--tag-bg); border-color: transparent; }
+    /* Section panels — flat surfaces with hairlines */
+    .panel,
+    .topic-map,
+    .channel-overview {
+      background: var(--surface);
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      box-shadow: none;
+      padding: 24px;
+      margin: 0 0 20px;
     }
-    .channel-overview { margin-bottom: 20px; }
+    .panel h2, .panel h3 { margin-top: 0; }
+
+    .topic-map.discovery-topic-map { border-color: var(--rule); }
+
+    .channel-overview { margin-bottom: 24px; }
     .channel-overview-stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 8px;
-      margin: 12px 0;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin: 16px 0 0;
     }
-    .channel-overview-latest { margin-top: 8px; }
+    .channel-overview-latest { margin-top: 12px; color: var(--ink-soft); }
+
+    /* Discovery topic map — pillar-style cards */
     .discovery-topic-header {
       display: flex;
       align-items: baseline;
@@ -266,6 +516,10 @@ HTML_PAGE = """<!doctype html>
     }
     .discovery-topic-header h3 {
       margin: 0;
+      font-family: var(--display);
+      font-size: 22px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
     }
     .discovery-topic-actions {
       display: flex;
@@ -275,444 +529,537 @@ HTML_PAGE = """<!doctype html>
     .discovery-topic-rename,
     .discovery-topic-merge,
     .discovery-topic-split {
+      font-family: var(--body);
       font-size: 12px;
-      padding: 4px 8px;
+      font-weight: 500;
+      padding: 5px 10px;
       border-radius: 8px;
-      border: 1px solid var(--border);
-      background: rgba(125, 211, 252, 0.06);
-      color: var(--accent);
+      border: 0.5px solid var(--rule);
+      background: var(--surface);
+      color: var(--ink-soft);
       cursor: pointer;
     }
     .discovery-topic-rename:hover,
     .discovery-topic-merge:hover,
     .discovery-topic-split:hover {
-      background: rgba(125, 211, 252, 0.16);
+      background: var(--tag-bg);
+      color: var(--ink);
+      border-color: var(--ink-soft);
     }
     .subtopic-video-move {
       margin-left: 6px;
       font-size: 11px;
-      padding: 2px 6px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: rgba(125, 211, 252, 0.06);
-      color: var(--accent);
+      padding: 3px 8px;
+      border-radius: 8px;
+      border: 0.5px solid var(--rule);
+      background: var(--tag-bg);
+      color: var(--ink-soft);
       cursor: pointer;
     }
-    .subtopic-video-move:hover {
-      background: rgba(125, 211, 252, 0.16);
-    }
+    .subtopic-video-move:hover { background: var(--blue-tint); color: var(--blue); border-color: var(--blue); }
+
+    /* Confidence — soft hairline track w/ teal fill, coral when low */
     .confidence-bar {
       position: relative;
-      height: 6px;
+      height: 4px;
       border-radius: 999px;
-      background: rgba(255,255,255,0.08);
+      background: var(--rule-soft);
       margin-top: 6px;
       overflow: hidden;
+      max-width: 180px;
     }
     .confidence-bar > span {
       position: absolute;
-      top: 0;
-      left: 0;
-      bottom: 0;
-      background: linear-gradient(90deg, rgba(134, 239, 172, 0.6), rgba(125, 211, 252, 0.7));
+      top: 0; left: 0; bottom: 0;
+      background: var(--teal);
       border-radius: 999px;
     }
-    .confidence-bar.low > span { background: rgba(251, 191, 36, 0.6); }
+    .confidence-bar.low > span { background: var(--coral); }
+
+    /* Episode rows — design's pillar/episode pattern, never truncated */
     .discovery-episode-list {
       list-style: none;
       padding: 0;
-      margin: 12px 0 0;
+      margin: 16px 0 0;
       display: grid;
-      gap: 8px;
+      gap: 0;
     }
     .discovery-episode {
       display: grid;
-      grid-template-columns: 64px minmax(0, 1fr);
-      gap: 10px;
-      padding: 8px;
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 12px;
-      background: rgba(11,16,32,0.42);
+      grid-template-columns: 152px minmax(0, 1fr);
+      gap: 24px;
+      padding: 20px 0;
+      border-top: var(--hairline);
+      background: transparent;
+      border-radius: 0;
+      border-bottom: 0;
+      align-items: start;
     }
-    .discovery-episode.low { opacity: 0.55; }
+    .discovery-episode:first-child { border-top: 0; }
+    .discovery-episode.low { opacity: 1; }
+    .discovery-episode.low .discovery-episode-title { color: var(--ink-soft); }
     .discovery-episode-thumb {
-      width: 64px;
-      height: 36px;
+      width: 152px;
+      height: 86px;
       object-fit: cover;
       border-radius: 8px;
-      background: rgba(255,255,255,0.05);
+      background:
+        repeating-linear-gradient(135deg, #ECE8DE 0 8px, #F3EFE6 8px 16px);
+      border: 0.5px solid var(--rule);
     }
     .discovery-episode-thumb.placeholder {
-      background: linear-gradient(135deg, rgba(125,211,252,0.18), rgba(134,239,172,0.10));
+      background:
+        repeating-linear-gradient(135deg, #ECE8DE 0 8px, #F3EFE6 8px 16px);
     }
     .discovery-episode-body { min-width: 0; }
     .discovery-episode-title {
-      font-size: 13px;
-      font-weight: 600;
-      line-height: 1.25;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: -0.005em;
+      color: var(--ink);
+      text-wrap: pretty;
+      word-break: break-word;
+      /* Design rule: never truncate video titles */
+      overflow: visible;
+      display: block;
+      -webkit-line-clamp: unset;
     }
     .discovery-episode-meta {
       display: flex;
-      gap: 10px;
+      flex-wrap: wrap;
+      gap: 8px 14px;
       align-items: center;
-      margin-top: 3px;
+      margin-top: 8px;
+      font-family: var(--mono);
       font-size: 11px;
+      letter-spacing: 0.02em;
+      color: var(--ink-soft);
     }
     .discovery-episode-confidence {
-      font-weight: 700;
-      color: var(--good);
+      font-family: var(--mono);
+      font-weight: 500;
+      color: var(--teal);
     }
-    .discovery-episode.low .discovery-episode-confidence { color: var(--bad); }
+    .discovery-episode.low .discovery-episode-confidence { color: var(--coral); }
     .discovery-episode-also-in {
+      font-family: var(--body);
       font-size: 11px;
-      color: var(--muted);
-      background: rgba(148, 163, 184, 0.12);
-      border-radius: 999px;
-      padding: 1px 8px;
+      color: var(--ink-soft);
+      background: var(--tag-bg);
+      border-radius: 8px;
+      padding: 3px 10px;
+      margin-left: 4px;
     }
     .discovery-topic-new-badge {
       display: inline-block;
       margin-left: 8px;
+      font-family: var(--body);
       font-size: 11px;
-      font-weight: 600;
-      color: var(--good);
-      background: rgba(74, 222, 128, 0.15);
-      border-radius: 999px;
-      padding: 1px 8px;
+      font-weight: 500;
+      color: var(--teal);
+      background: var(--teal-tint);
+      border-radius: 8px;
+      padding: 2px 9px;
       vertical-align: middle;
     }
     .discovery-episode-reason {
-      margin-top: 4px;
-      font-size: 12px;
-      color: var(--muted);
+      margin-top: 12px;
+      font-family: var(--display);
       font-style: italic;
+      font-size: 15px;
+      font-weight: 400;
+      line-height: 1.55;
+      color: var(--ink-soft);
+      border-left: 1px solid var(--coral);
+      padding-left: 14px;
+      max-width: 64ch;
     }
-    .discovery-episode-empty {
-      margin-top: 10px;
-      font-size: 12px;
-    }
-    .discovery-episode-wrong {
-      margin-top: 6px;
-      background: rgba(252, 165, 165, 0.10);
-      color: var(--bad);
-      border: 1px solid rgba(252, 165, 165, 0.40);
-      border-radius: 999px;
-      padding: 2px 10px;
-      font-size: 11px;
-      cursor: pointer;
-    }
-    .discovery-episode-wrong:hover {
-      background: rgba(252, 165, 165, 0.22);
-    }
+    .discovery-episode-empty { margin-top: 10px; font-size: 13px; color: var(--ink-soft); }
+    .discovery-episode-wrong,
     .subtopic-video-wrong {
-      margin-left: 6px;
-      background: rgba(252, 165, 165, 0.10);
+      margin-top: 8px;
+      background: transparent;
       color: var(--bad);
-      border: 1px solid rgba(252, 165, 165, 0.40);
-      border-radius: 999px;
-      padding: 2px 8px;
+      border: 0.5px solid rgba(153,27,27,0.30);
+      border-radius: 8px;
+      padding: 4px 10px;
       font-size: 11px;
+      font-family: var(--body);
+      font-weight: 500;
       cursor: pointer;
     }
+    .subtopic-video-wrong { margin-left: 6px; margin-top: 0; }
+    .discovery-episode-wrong:hover,
     .subtopic-video-wrong:hover {
-      background: rgba(252, 165, 165, 0.22);
+      background: rgba(153,27,27,0.06);
     }
+
+    /* Subtopic accordion — design's caret + serif heading */
     .discovery-subtopic-list {
       display: grid;
-      gap: 6px;
-      margin-top: 12px;
+      gap: 4px;
+      margin-top: 16px;
     }
     .discovery-subtopic-bucket {
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 10px;
-      background: rgba(11,16,32,0.32);
-      padding: 6px 10px;
+      border: 0;
+      border-top: var(--hairline);
+      border-radius: 0;
+      background: transparent;
+      padding: 14px 0 0;
     }
+    .discovery-subtopic-bucket:first-of-type { border-top: 0; padding-top: 8px; }
     .discovery-subtopic-bucket > summary {
       cursor: pointer;
-      font-size: 13px;
-      font-weight: 600;
       list-style: none;
       display: flex;
-      align-items: center;
+      align-items: baseline;
+      justify-content: space-between;
       gap: 8px;
+      padding: 6px 0 12px;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 18px;
+      letter-spacing: -0.005em;
+      color: var(--ink);
     }
     .discovery-subtopic-bucket > summary::-webkit-details-marker { display: none; }
-    .discovery-subtopic-bucket .discovery-episode-list { margin-top: 8px; }
-    .discovery-subtopic-unassigned > summary { color: var(--muted); font-style: italic; }
+    .discovery-subtopic-bucket > summary::before {
+      content: "";
+      width: 7px; height: 7px;
+      margin-right: 10px;
+      border-right: 1.5px solid var(--ink);
+      border-bottom: 1.5px solid var(--ink);
+      transform: rotate(-45deg);
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .discovery-subtopic-bucket[open] > summary::before {
+      transform: rotate(45deg);
+      margin-bottom: 2px;
+    }
+    .discovery-subtopic-bucket .discovery-episode-list { margin-top: 4px; }
+    .discovery-subtopic-unassigned > summary {
+      color: var(--ink-soft);
+      font-style: italic;
+    }
     .discovery-episode-sort-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      margin-top: 12px;
-      font-size: 12px;
-      color: var(--muted);
+      gap: 10px;
+      margin-top: 16px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--ink-soft);
+      text-transform: uppercase;
     }
     .discovery-episode-sort {
-      background: rgba(11,16,32,0.6);
-      color: var(--text);
-      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--ink);
+      border: 0.5px solid var(--rule);
       border-radius: 8px;
-      padding: 4px 6px;
+      padding: 6px 10px;
+      font-family: var(--body);
       font-size: 12px;
+      letter-spacing: 0;
+      text-transform: none;
     }
+
+    /* Topic map (pillars) */
     .topic-map-head {
       display: flex;
       justify-content: space-between;
       gap: 14px;
       align-items: end;
-      margin-bottom: 14px;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: var(--hairline);
     }
-    .topic-map-head h2 { margin: 0 0 4px; }
+    .topic-map-head h2 { margin: 0 0 4px; font-size: 22px; }
     .topic-map-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
     }
     .topic-card {
-      border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 14px;
-      background: rgba(255,255,255,0.025);
-    }
-    .topic-card.selected {
-      border-color: rgba(125, 211, 252, 0.5);
-      box-shadow: inset 0 0 0 1px rgba(125, 211, 252, 0.18);
-    }
-    .topic-card {
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      padding: 18px;
+      background: var(--surface);
       position: relative;
-      overflow: hidden;
-      transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
-    }
-    .topic-card::after {
-      content: "";
-      position: absolute;
-      inset: auto 12px 12px auto;
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(125, 211, 252, 0.14), transparent 68%);
-      pointer-events: none;
+      transition: border-color 0.15s, transform 0.15s;
     }
     .topic-card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(125, 211, 252, 0.42);
-      background: rgba(255,255,255,0.04);
+      border-color: var(--ink-soft);
     }
     .topic-card.selected {
-      background:
-        linear-gradient(135deg, rgba(125, 211, 252, 0.10), rgba(134, 239, 172, 0.035)),
-        rgba(255,255,255,0.035);
+      border-color: var(--coral);
+    }
+    .topic-card.selected::before {
+      content: "";
+      position: absolute;
+      left: -1px; top: -1px; bottom: -1px;
+      width: 3px;
+      background: var(--coral);
+      border-radius: 12px 0 0 12px;
     }
     .topic-card h3 {
-      margin: 0 0 8px;
-      font-size: 18px;
+      margin: 0 0 10px;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.01em;
     }
     .topic-card .topic-stats {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
+      gap: 10px;
       margin: 10px 0;
     }
     .topic-stat {
-      padding: 8px;
-      border-radius: 10px;
-      background: rgba(255,255,255,0.035);
-      border: 1px solid rgba(255,255,255,0.055);
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      border: 0;
     }
-    .topic-stat .k { display: block; color: var(--muted); font-size: 11px; }
-    .topic-stat strong { font-size: 18px; }
+    .topic-stat .k {
+      display: block;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--ink-mute);
+      text-transform: uppercase;
+    }
+    .topic-stat strong {
+      display: block;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 22px;
+      color: var(--ink);
+      margin-top: 2px;
+    }
     .status-chip {
       display: inline-flex;
-      border-radius: 999px;
-      padding: 4px 9px;
-      font-size: 12px;
-      border: 1px solid var(--border);
-      color: var(--muted);
+      align-items: center;
+      gap: 6px;
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-family: var(--body);
+      font-size: 11px;
+      font-weight: 400;
+      border: 0;
+      color: var(--ink-soft);
+      background: var(--tag-bg);
     }
-    .status-chip.warn { color: #fde68a; border-color: rgba(251, 191, 36, 0.4); background: rgba(251, 191, 36, 0.08); }
-    .status-chip.good { color: var(--good); border-color: rgba(134, 239, 172, 0.35); background: rgba(134, 239, 172, 0.08); }
-    .status-chip.accent { color: var(--accent); border-color: rgba(125, 211, 252, 0.35); background: rgba(125, 211, 252, 0.08); }
+    .status-chip.warn { color: var(--coral); background: var(--coral-tint); }
+    .status-chip.good { color: var(--teal); background: var(--teal-tint); }
+    .status-chip.accent { color: var(--blue); background: var(--blue-tint); }
+
+    /* Topic detail panel — focused pillar */
     .topic-detail {
-      margin: 0 0 20px;
-      border-radius: 20px;
-      border: 1px solid rgba(134, 239, 172, 0.18);
-      background:
-        linear-gradient(135deg, rgba(134, 239, 172, 0.08), transparent 36%),
-        linear-gradient(225deg, rgba(125, 211, 252, 0.10), transparent 42%),
-        rgba(11, 16, 32, 0.72);
-      box-shadow: 0 20px 54px rgba(0,0,0,0.26);
-      padding: 18px;
+      margin: 0 0 24px;
+      border-radius: 12px;
+      border: 0.5px solid var(--rule);
+      background: var(--surface);
+      box-shadow: none;
+      padding: 24px;
     }
-    .topic-detail.empty { border-style: dashed; }
+    .topic-detail.empty {
+      border-style: dashed;
+      background: var(--paper);
+    }
     .topic-detail-head {
       display: flex;
       justify-content: space-between;
       gap: 16px;
       align-items: start;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
     }
     .topic-detail h2 {
       margin: 4px 0 4px;
-      font-size: clamp(24px, 4vw, 40px);
-      letter-spacing: -0.04em;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: clamp(28px, 4vw, 44px);
+      letter-spacing: -0.01em;
     }
     .topic-detail .eyebrow {
-      color: var(--accent);
+      color: var(--ink-soft);
       text-transform: uppercase;
-      letter-spacing: 0.12em;
-      font-size: 11px;
-      font-weight: 700;
+      letter-spacing: 0.06em;
+      font-size: 14px;
+      font-weight: 600;
     }
     .workflow-rail {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 14px;
+      gap: 12px;
+      margin-top: 16px;
     }
     .workflow-step {
-      border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 14px;
-      padding: 12px;
-      background: rgba(255,255,255,0.03);
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      padding: 14px;
+      background: var(--surface);
     }
-    .workflow-step strong { display: block; margin-bottom: 4px; }
+    .workflow-step strong {
+      display: block;
+      margin-bottom: 4px;
+      font-family: var(--display);
+      font-size: 16px;
+    }
     .workflow-step.current {
-      border-color: rgba(125, 211, 252, 0.38);
-      background: rgba(125, 211, 252, 0.08);
+      border-color: var(--coral);
+      background: var(--coral-tint);
     }
     .topic-inventory {
-      margin-top: 16px;
+      margin-top: 20px;
       display: grid;
       grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
-      gap: 14px;
+      gap: 20px;
     }
     .inventory-panel {
-      border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 16px;
-      padding: 14px;
-      background: rgba(255,255,255,0.028);
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      padding: 18px;
+      background: var(--surface);
     }
-    .inventory-panel h3 { margin: 0 0 8px; }
+    .inventory-panel h3 { margin: 0 0 10px; font-size: 18px; }
     .subtopic-bucket {
-      border-top: 1px solid rgba(255,255,255,0.07);
-      padding-top: 10px;
-      margin-top: 10px;
+      border-top: var(--hairline);
+      padding-top: 14px;
+      margin-top: 14px;
     }
     .subtopic-bucket:first-of-type { border-top: 0; padding-top: 0; }
     .video-list {
       display: grid;
-      gap: 6px;
-      margin-top: 8px;
+      gap: 8px;
+      margin-top: 10px;
     }
     .video-chip {
-      border: 1px solid rgba(255,255,255,0.06);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: rgba(11,16,32,0.48);
-      color: var(--text);
-      font-size: 13px;
+      border: 0.5px solid var(--rule);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 14px;
     }
-    .video-chip .meta { color: var(--muted); font-size: 11px; margin-top: 3px; }
+    .video-chip .meta {
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-top: 4px;
+    }
     .readiness {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      border-radius: 999px;
-      padding: 4px 9px;
+      border-radius: 8px;
+      padding: 3px 9px;
       margin-left: 6px;
-      font-size: 12px;
-      font-weight: 700;
-      border: 1px solid rgba(255,255,255,0.08);
+      font-family: var(--body);
+      font-size: 11px;
+      font-weight: 500;
+      border: 0;
     }
-    .readiness.ready { color: #86efac; background: rgba(34,197,94,0.10); border-color: rgba(34,197,94,0.24); }
-    .readiness.needs-transcripts { color: #fbbf24; background: rgba(251,191,36,0.10); border-color: rgba(251,191,36,0.24); }
-    .readiness.thin { color: #fca5a5; background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.24); }
-    .transcript-coverage { color: var(--muted); font-size: 11px; margin-top: 4px; }
-    .subtopic-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .readiness.ready { color: var(--teal); background: var(--teal-tint); }
+    .readiness.needs-transcripts { color: var(--coral); background: var(--coral-tint); }
+    .readiness.thin { color: var(--bad); background: rgba(153,27,27,0.08); }
+    .transcript-coverage {
+      color: var(--ink-soft);
+      font-family: var(--mono);
+      font-size: 11px;
+      margin-top: 6px;
+    }
+    .subtopic-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
     @media (max-width: 900px) { .topic-inventory { grid-template-columns: 1fr; } }
+
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
       gap: 20px;
-    }
-    .panel {
-      padding: 18px;
-    }
-    .panel h2, .panel h3 {
-      margin-top: 0;
     }
     .section-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      margin-bottom: 14px;
+      margin-bottom: 18px;
+      padding-bottom: 14px;
+      border-bottom: var(--hairline);
     }
+    .section-head h2 { font-size: 22px; }
     .metrics {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 16px;
+      gap: 12px;
+      margin-bottom: 18px;
     }
     .metric {
-      min-width: 110px;
-      padding: 10px 12px;
-      background: rgba(255,255,255,0.03);
-      border: 1px solid var(--border);
+      min-width: 130px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 0.5px solid var(--rule);
       border-radius: 12px;
     }
     .metric .k {
       display: block;
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin-bottom: 6px;
     }
     .metric strong {
-      font-size: 20px;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 22px;
     }
     .cards {
       display: grid;
-      gap: 12px;
+      gap: 14px;
     }
     .card {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-      background: rgba(255,255,255,0.02);
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      padding: 18px;
+      background: var(--surface);
     }
     .card h4 {
-      margin: 0 0 8px;
+      margin: 0 0 10px;
+      font-family: var(--display);
+      font-weight: 500;
       font-size: 18px;
+      letter-spacing: -0.005em;
     }
     .next-step {
-      margin: 10px 0;
-      padding: 10px 12px;
-      border: 1px solid rgba(251, 191, 36, 0.4);
-      background: rgba(251, 191, 36, 0.09);
-      border-radius: 12px;
-      color: #fde68a;
+      margin: 12px 0;
+      padding: 12px 14px;
+      border: 0.5px solid var(--coral);
+      background: var(--coral-tint);
+      border-radius: 8px;
+      color: var(--coral);
       font-size: 13px;
     }
     .next-step.good {
-      border-color: rgba(134, 239, 172, 0.35);
-      background: rgba(134, 239, 172, 0.08);
-      color: var(--good);
+      border-color: var(--teal);
+      background: var(--teal-tint);
+      color: var(--teal);
     }
     .pill {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      border-radius: 999px;
+      border-radius: 8px;
       padding: 4px 10px;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      font-size: 12px;
+      border: 0;
+      color: var(--ink-soft);
+      background: var(--tag-bg);
+      font-family: var(--body);
+      font-size: 11px;
+      font-weight: 400;
       margin-right: 6px;
       margin-bottom: 6px;
     }
@@ -722,82 +1069,500 @@ HTML_PAGE = """<!doctype html>
     }
     ul.samples li {
       margin-bottom: 6px;
-      color: var(--muted);
+      color: var(--ink-soft);
     }
     .actions {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
-      margin-top: 12px;
+      margin-top: 14px;
     }
-    .inline-field {
-      width: min(320px, 100%);
-    }
+    .inline-field { width: min(320px, 100%); }
     .status {
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: rgba(125, 211, 252, 0.08);
-      color: var(--text);
+      margin-top: 14px;
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 0.5px solid var(--rule);
+      background: var(--tag-bg);
+      color: var(--ink);
       min-height: 44px;
       white-space: pre-wrap;
+      font-family: var(--mono);
+      font-size: 12px;
     }
-    .list {
-      display: grid;
-      gap: 10px;
-    }
-    .list-item {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.02);
-    }
-    .label-applications {
-      display: grid;
-      gap: 8px;
-      margin-top: 12px;
-    }
+    .list { display: grid; gap: 10px; }
+    .list-item,
     .application-row {
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: center;
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      background: rgba(255,255,255,0.02);
+      padding: 12px 14px;
+      border-radius: 8px;
+      border: 0.5px solid var(--rule);
+      background: var(--surface);
+    }
+    .label-applications {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
     }
     .application-row .meta {
-      font-size: 12px;
-      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-soft);
       margin-top: 4px;
     }
     .empty {
-      color: var(--muted);
-      border: 1px dashed var(--border);
+      color: var(--ink-soft);
+      border: 0.5px dashed var(--rule);
       border-radius: 12px;
-      padding: 16px;
+      padding: 20px;
+      background: var(--paper);
+      text-align: center;
     }
     code {
-      color: var(--accent);
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--tag-bg);
+      padding: 1px 6px;
+      border-radius: 4px;
       word-break: break-all;
     }
     @media (max-width: 800px) {
-      .wrap { padding: 14px; }
+      .topbar { padding: 14px 20px; }
+      .stepper { padding: 16px 20px 20px; grid-template-columns: 1fr 1fr; gap: 16px 8px; }
+      .stage-inner { padding: 24px 20px 80px; }
       .grid { grid-template-columns: 1fr; }
+      .topic-map-head { flex-direction: column; align-items: stretch; }
+    }
+
+    /* ─── Design-faithful Review canvas ─── */
+
+    /* Hide legacy panels (kept in DOM so existing tests pass). */
+    .panel.channel-overview,
+    section.topic-map:not(.discovery-topic-map),
+    #selected-topic-detail,
+    .stage-inner > .wrap > .grid,
+    .run-history-advanced,
+    .generator { display: none !important; }
+    /* The settings panel (controls row + selects) is collapsed away too.
+       The discovery-topic-map IS the Review surface. */
+    .panel.review-settings { display: none !important; }
+
+    /* Review toolbar — eyebrow + serif H1 + sort/action row */
+    .review-toolbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 28px;
+      padding-bottom: 16px;
+      border-bottom: var(--hairline);
+    }
+    .review-toolbar h1 { font-size: 28px; }
+    .review-toolbar .lede {
+      margin-top: 8px;
+      max-width: 60ch;
+      color: var(--ink-soft);
+      font-size: 15px;
+    }
+    .review-toolbar .lede .accent { color: var(--coral); }
+    .review-toolbar .toolbar-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .review-toolbar .toolbar-actions .vrule {
+      width: 1px; height: 24px;
+      background: var(--rule);
+      margin: 0 4px;
+    }
+    .review-toolbar .toolbar-actions button.active {
+      background: var(--ink);
+      color: #fff;
+      border-color: var(--ink);
+    }
+    .review-toolbar .toolbar-actions button.active:hover {
+      background: var(--ink);
+      color: #fff;
+    }
+    .review-toolbar .toolbar-actions .sort-label {
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      color: var(--ink-soft);
+      align-self: center;
+      margin-right: 4px;
+      text-transform: uppercase;
+    }
+
+    /* Review canvas — overview vs focused */
+    .review-canvas { display: block; }
+    .review-canvas.is-focused {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 0;
+      align-items: stretch;
+      min-height: 720px;
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .review-canvas:not(.is-focused) #minimap { display: none; }
+    .review-canvas.is-focused #review-overview { display: none; }
+    .review-canvas:not(.is-focused) #review-focused { display: none; }
+
+    /* Pillar overview grid */
+    #review-overview .topic-map-grid,
+    #discovery-topic-map-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 20px;
+    }
+    @media (max-width: 1100px) {
+      #review-overview .topic-map-grid,
+      #discovery-topic-map-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      #review-overview .topic-map-grid,
+      #discovery-topic-map-grid { grid-template-columns: 1fr; }
+    }
+    /* Compact pillar — no inline episodes in overview state */
+    .pillar {
+      background: var(--surface);
+      border: 0.5px solid var(--rule);
+      border-radius: 12px;
+      padding: 20px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 200px;
+      cursor: pointer;
+      transition: border-color 0.15s, transform 0.15s;
+      position: relative;
+    }
+    .pillar:hover {
+      border-color: var(--ink-soft);
+      transform: translateY(-1px);
+    }
+    .pillar.is-active {
+      border-color: var(--coral);
+    }
+    .pillar.is-active::before {
+      content: "";
+      position: absolute;
+      left: -1px; top: -1px; bottom: -1px;
+      width: 3px;
+      background: var(--coral);
+      border-radius: 12px 0 0 12px;
+    }
+    .pillar-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+    }
+    .pillar-head h3 {
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      max-width: 18ch;
+      margin: 0;
+    }
+    .pillar-head .count {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-soft);
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+    }
+    .pillar .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .pillar .chip {
+      font-family: var(--body);
+      font-size: 11px;
+      font-weight: 400;
+      padding: 4px 10px;
+      border-radius: 8px;
+      color: var(--ink-soft);
+      background: var(--tag-bg);
+    }
+    .pillar-foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin-top: auto;
+      padding-top: 8px;
+      gap: 12px;
+    }
+    .pillar-foot .pct {
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-mute);
+      letter-spacing: 0.04em;
+    }
+    /* Dot grid — confidence sparkline */
+    .dotgrid {
+      display: inline-grid;
+      grid-auto-flow: column;
+      gap: 2px;
+    }
+    .dotgrid .d {
+      width: 4px; height: 14px; border-radius: 2px;
+      background: var(--rule);
+    }
+    .dotgrid .d.s4 { background: var(--coral); }
+    .dotgrid .d.s3 { background: #E48462; }
+    .dotgrid .d.s2 { background: #ECAA94; }
+    .dotgrid .d.s1 { background: #F1CFC0; }
+
+    .overview-hint {
+      margin: 36px 0 0;
+      text-align: center;
+      font-family: var(--display);
+      font-style: italic;
+      font-size: 14px;
+      color: var(--ink-soft);
+    }
+
+    /* Minimap (focused state) */
+    #minimap {
+      border-right: var(--hairline);
+      background: var(--paper);
+      display: flex;
+      flex-direction: column;
+    }
+    .minimap-head {
+      padding: 20px 24px 16px 32px;
+      border-bottom: var(--hairline);
+    }
+    .minimap-head .eyebrow { margin-bottom: 6px; font-size: 12px; }
+    .minimap-head .mono { font-size: 11px; color: var(--ink-soft); }
+    .mm-row {
+      padding: 16px 24px 16px 32px;
+      border-bottom: var(--hairline);
+      cursor: pointer;
+      position: relative;
+    }
+    .mm-row:hover { background: rgba(216, 90, 48, 0.04); }
+    .mm-row .mm-name {
+      display: block;
+      font-family: var(--display);
+      font-weight: 500;
+      font-size: 16px;
+      letter-spacing: -0.005em;
+      line-height: 1.25;
+      color: var(--ink-soft);
+    }
+    .mm-row .mm-count {
+      display: block;
+      margin-top: 4px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      color: var(--ink-mute);
+      letter-spacing: 0.04em;
+    }
+    .mm-row.is-focus { background: var(--surface); }
+    .mm-row.is-focus .mm-name { color: var(--ink); }
+    .mm-row.is-focus::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--coral);
+    }
+    .minimap-back {
+      padding: 18px 24px 24px 32px;
+      margin-top: auto;
+    }
+    .minimap-back button {
+      padding: 0;
+      font-size: 12px;
+      color: var(--ink-soft);
+      border: 0;
+      background: transparent;
+    }
+    .minimap-back button:hover { color: var(--ink); background: transparent; }
+
+    /* Focused content */
+    .focused-content {
+      padding: 40px 56px 64px;
+      max-width: 1000px;
+      background: var(--surface);
+    }
+    .focused-content .focus-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .focused-content .focus-head h1 {
+      font-size: 44px;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+    .focused-content .focus-head .lede {
+      color: var(--ink-soft);
+      font-size: 15px;
+      max-width: 52ch;
+    }
+    .focused-content .focus-head .focus-actions {
+      display: flex;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    /* Subtopic tab strip */
+    .subtopic-tabs {
+      display: flex;
+      gap: 28px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      border-bottom: var(--hairline);
+    }
+    .subtopic-tab {
+      font-family: var(--display);
+      font-size: 16px;
+      color: var(--ink-soft);
+      border-bottom: 1px solid transparent;
+      padding-bottom: 6px;
+      cursor: pointer;
+      background: none;
+      border-top: 0; border-left: 0; border-right: 0;
+      border-radius: 0;
+      transition: color 0.12s, border-color 0.12s;
+    }
+    .subtopic-tab .count {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-mute);
+      margin-left: 4px;
+    }
+    .subtopic-tab:hover { color: var(--ink); background: none; border-color: transparent; }
+    .subtopic-tab.is-active {
+      color: var(--ink);
+      border-bottom-color: var(--coral);
+    }
+
+    /* In focused mode, the panel chrome on the discovery-topic-map wrapper goes away */
+    .review-canvas.is-focused .topic-map.discovery-topic-map {
+      border: 0;
+      padding: 0;
+      margin: 0;
+      background: transparent;
+    }
+    .review-canvas .topic-map.discovery-topic-map { padding: 0; border: 0; background: transparent; margin: 0; }
+    .review-canvas .topic-map-head { display: none; }
+
+    /* Episode action column — design's "Watch / Rename / Wrong topic" stack */
+    .ep-actions-col {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .ep-actions-col button {
+      font-size: 12px;
+      padding: 6px 10px;
+    }
+
+    /* Override episode list when inside focused content — give it 3-col layout */
+    .focused-content .discovery-episode {
+      grid-template-columns: 152px minmax(0, 1fr) auto;
+      gap: 24px;
+    }
+    .focused-content .discovery-episode-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .focused-content .discovery-episode-actions button {
+      font-size: 12px;
+      padding: 6px 10px;
+      width: max-content;
     }
   </style>
 </head>
 <body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="wordmark"><span class="wordmark-dot"></span>YouTube Analyser</span>
+      <span class="version">UI rev {{UI_REVISION}}</span>
+    </div>
+    <div class="topbar-right">
+      <span class="channel-pill" id="channel-pill" hidden>
+        <span class="av" id="channel-pill-av">·</span>
+        <span id="channel-pill-name">—</span>
+        <span class="div"></span>
+        <span class="yt-id" id="channel-pill-id">—</span>
+      </span>
+      <button class="secondary" id="refresh-btn">Refresh</button>
+    </div>
+  </header>
+
+  <nav class="stepper" aria-label="Pipeline stages">
+    <button class="step done" type="button" disabled>
+      <span class="marker" aria-hidden="true"></span>
+      <span class="step-text">
+        <span class="label">Supply</span>
+        <span class="sub" id="step-supply-sub">videos &amp; transcripts</span>
+      </span>
+    </button>
+    <button class="step done" type="button" disabled>
+      <span class="marker" aria-hidden="true"></span>
+      <span class="step-text">
+        <span class="label">Discover</span>
+        <span class="sub" id="step-discover-sub">topic discovery runs</span>
+      </span>
+    </button>
+    <button class="step act" type="button" disabled>
+      <span class="marker" aria-hidden="true"></span>
+      <span class="step-text">
+        <span class="label">Review</span>
+        <span class="sub" id="step-review-sub">curate the topic map</span>
+      </span>
+    </button>
+    <button class="step idle" type="button" disabled>
+      <span class="marker" aria-hidden="true"></span>
+      <span class="step-text">
+        <span class="label">Consume</span>
+        <span class="sub">Phase C — not yet wired</span>
+      </span>
+    </button>
+  </nav>
+
+  <main class="stage-inner">
   <div class="wrap">
-    <section class="topbar">
-      <h1 class="title">YT Channel Analyzer Review UI <span class="revision-badge">UI rev {{UI_REVISION}}</span></h1>
-      <div class="muted">Local-only review surface for topic, subtopic, and comparison-group suggestion labels.</div>
+    <section class="review-toolbar">
+      <div>
+        <div class="eyebrow">Review · stage 3 of 4</div>
+        <h1 class="title">The map of <em id="channel-display-name">your channel</em></h1>
+        <p class="lede" id="review-lede">Loading channel data…</p>
+      </div>
+      <div class="toolbar-actions">
+        <span class="sort-label">Sort</span>
+        <button id="overview-sort-eps" class="active">Episode count ↓</button>
+        <button id="overview-sort-az" class="secondary">Topic A–Z</button>
+        <span class="vrule"></span>
+        <button id="discard-run-btn" class="secondary">Discard run</button>
+        <button id="mark-caught-up-btn" class="primary-action">Mark caught up</button>
+      </div>
+    </section>
+
+    <div id="status-box" class="status">Loading channel data… If this does not change, the page hit a client-side render error.</div>
+
+    <!-- Legacy settings + controls — kept in DOM (tests inspect them) but hidden visually. -->
+    <section class="panel review-settings" hidden>
       <div id="context-grid" class="context-grid"></div>
       <div class="controls row">
         <label>
@@ -808,10 +1573,9 @@ HTML_PAGE = """<!doctype html>
           Subtopic for comparison-group review
           <select id="subtopic-select"></select>
         </label>
-        <button id="refresh-btn" class="secondary">Refresh</button>
       </div>
       <div class="generator">
-        <div class="muted">Generate a fresh run from this dataset, then review it below.</div>
+        <div class="soft small">Generate a fresh run from this dataset, then review it below.</div>
         <div class="controls row stretch">
           <label>
             Model
@@ -821,7 +1585,7 @@ HTML_PAGE = """<!doctype html>
             Limit
             <input id="limit-input" type="number" min="1" step="1" placeholder="All eligible videos">
           </label>
-          <button id="generate-topics-btn">Generate topic suggestions</button>
+          <button id="generate-topics-btn" class="primary-action">Generate topic suggestions</button>
           <button id="generate-subtopics-btn">Generate subtopic suggestions</button>
         </div>
       </div>
@@ -833,7 +1597,6 @@ HTML_PAGE = """<!doctype html>
           <select id="run-select"></select>
         </label>
       </details>
-      <div class="status" id="status-box">Loading channel data… If this does not change, the page hit a client-side render error.</div>
     </section>
 
     <section class="panel channel-overview">
@@ -847,16 +1610,23 @@ HTML_PAGE = """<!doctype html>
       <div id="channel-overview-latest" class="channel-overview-latest"></div>
     </section>
 
-    <section class="topic-map discovery-topic-map">
-      <div class="topic-map-head">
-        <div>
-          <h2>Auto-Discovered Topics</h2>
-          <div class="muted">Latest discovery run. Episode counts and confidence come straight from the model — curate from here.</div>
+    <div id="review-canvas" class="review-canvas">
+      <aside id="minimap"></aside>
+      <section class="topic-map discovery-topic-map">
+        <div class="topic-map-head">
+          <div>
+            <h2>Auto-Discovered Topics</h2>
+            <div class="muted">Latest discovery run. Episode counts and confidence come straight from the model — curate from here.</div>
+          </div>
+          <div id="discovery-topic-map-meta" class="muted"></div>
         </div>
-        <div id="discovery-topic-map-meta" class="muted"></div>
-      </div>
-      <div id="discovery-topic-map-grid" class="topic-map-grid"></div>
-    </section>
+        <div id="review-overview">
+          <div id="discovery-topic-map-grid" class="topic-map-grid"></div>
+          <p class="overview-hint">Click a pillar to focus it.</p>
+        </div>
+        <div id="review-focused" class="focused-content"></div>
+      </section>
+    </div>
 
     <section class="topic-map">
       <div class="topic-map-head">
@@ -917,9 +1687,38 @@ HTML_PAGE = """<!doctype html>
       </section>
     </div>
   </div>
+  </main>
 
   <script>
-    const state = { payload: null, activeTopicName: null };
+    const state = {
+      payload: null,
+      activeTopicName: null,
+      focusedTopic: null,
+      activeSubtopic: null,
+      overviewSort: 'episodes',
+    };
+
+    function focusTopic(name) {
+      state.focusedTopic = name || null;
+      state.activeSubtopic = null;
+      renderDiscoveryTopicMap(lastDiscoveryTopicMap);
+    }
+    function setActiveSubtopic(name) {
+      state.activeSubtopic = name || null;
+      renderDiscoveryTopicMap(lastDiscoveryTopicMap);
+    }
+    function setOverviewSort(mode) {
+      state.overviewSort = mode || 'episodes';
+      const epsBtn = document.getElementById('overview-sort-eps');
+      const azBtn = document.getElementById('overview-sort-az');
+      if (epsBtn && azBtn) {
+        epsBtn.classList.toggle('active', state.overviewSort === 'episodes');
+        epsBtn.classList.toggle('secondary', state.overviewSort !== 'episodes');
+        azBtn.classList.toggle('active', state.overviewSort === 'az');
+        azBtn.classList.toggle('secondary', state.overviewSort !== 'az');
+      }
+      renderDiscoveryTopicMap(lastDiscoveryTopicMap);
+    }
 
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>"']/g, (char) => ({
@@ -1193,15 +1992,41 @@ HTML_PAGE = """<!doctype html>
       const subtitleEl = document.getElementById('channel-overview-subtitle');
       const statsEl = document.getElementById('channel-overview-stats');
       const latestEl = document.getElementById('channel-overview-latest');
+      const pillEl = document.getElementById('channel-pill');
+      const pillName = document.getElementById('channel-pill-name');
+      const pillId = document.getElementById('channel-pill-id');
+      const pillAv = document.getElementById('channel-pill-av');
+      const displayName = document.getElementById('channel-display-name');
+      const supplySub = document.getElementById('step-supply-sub');
+      const discoverSub = document.getElementById('step-discover-sub');
+      const reviewSub = document.getElementById('step-review-sub');
       if (!overview) {
         titleEl.textContent = 'Channel Overview';
         subtitleEl.textContent = 'No primary channel set';
         statsEl.innerHTML = '';
         latestEl.innerHTML = '';
+        if (pillEl) pillEl.hidden = true;
+        if (displayName) displayName.textContent = 'your channel';
         return;
       }
-      titleEl.textContent = overview.channel_title || 'Channel Overview';
+      const channelTitle = overview.channel_title || 'Channel Overview';
+      titleEl.textContent = channelTitle;
       subtitleEl.textContent = overview.channel_id ? `Channel ID: ${overview.channel_id}` : '';
+      if (displayName) displayName.textContent = channelTitle;
+      if (pillEl) {
+        pillEl.hidden = false;
+        if (pillName) pillName.textContent = channelTitle;
+        if (pillAv) pillAv.textContent = (channelTitle || '·').trim().charAt(0).toUpperCase() || '·';
+        if (pillId) {
+          const cid = overview.channel_id || '';
+          pillId.textContent = cid.length > 12 ? cid.slice(0, 4) + '…' + cid.slice(-4) : (cid || '—');
+        }
+      }
+      if (supplySub) {
+        const v = overview.video_count ?? 0;
+        const t = overview.transcript_count ?? 0;
+        supplySub.textContent = `${v} videos · ${t} with transcripts`;
+      }
       const tiles = [
         ['Videos', overview.video_count],
         ['Transcripts', overview.transcript_count],
@@ -1215,87 +2040,283 @@ HTML_PAGE = """<!doctype html>
       const latest = overview.latest_discovery;
       if (!latest) {
         latestEl.innerHTML = '<div class="muted"><strong>Latest discovery</strong> · <em>No discovery yet — run <code>analyze</code> or <code>discover</code> to start.</em></div>';
+        if (discoverSub) discoverSub.textContent = 'no runs yet';
+        if (reviewSub) reviewSub.textContent = '—';
         return;
       }
       latestEl.innerHTML = `<div class="muted"><strong>Latest discovery</strong> · run #${escapeHtml(latest.id)} · ${escapeHtml(latest.status)} · ${escapeHtml(latest.started_at)} · ${escapeHtml(latest.model)} · ${escapeHtml(latest.prompt_version)}</div>`;
+      if (discoverSub) discoverSub.textContent = `run #${latest.id} · ${latest.started_at || ''}`.trim();
+      if (reviewSub) reviewSub.textContent = `${overview.topic_count ?? 0} topics · ${overview.subtopic_count ?? 0} subtopics`;
+    }
+
+    function dotGridHtml(episodes, lowThreshold) {
+      const eps = (episodes || []).slice(0, 16);
+      if (!eps.length) return '<span class="dotgrid"></span>';
+      const cells = eps.map((ep) => {
+        const c = ep.confidence;
+        if (c == null) return '<span class="d"></span>';
+        if (c >= 0.85) return '<span class="d s4"></span>';
+        if (c >= 0.7)  return '<span class="d s3"></span>';
+        if (c >= lowThreshold) return '<span class="d s2"></span>';
+        return '<span class="d s1"></span>';
+      }).join('');
+      return `<span class="dotgrid">${cells}</span>`;
+    }
+
+    function highConfidencePct(episodes, lowThreshold) {
+      const eps = episodes || [];
+      if (!eps.length) return null;
+      const high = eps.filter((ep) => ep.confidence != null && ep.confidence >= 0.7).length;
+      return Math.round((high / eps.length) * 100);
     }
 
     function renderDiscoveryTopicMap(map) {
       lastDiscoveryTopicMap = map;
+      const canvas = document.getElementById('review-canvas');
       const grid = document.getElementById('discovery-topic-map-grid');
+      const overviewWrap = document.getElementById('review-overview');
+      const focusedWrap = document.getElementById('review-focused');
+      const minimap = document.getElementById('minimap');
       const meta = document.getElementById('discovery-topic-map-meta');
+      const lede = document.getElementById('review-lede');
+
       if (!map) {
+        canvas.classList.remove('is-focused');
+        state.focusedTopic = null;
         grid.innerHTML = '<div class="empty">No discovery run yet. Run <code>analyze --stub</code> or <code>discover --stub</code> to populate this panel.</div>';
         meta.textContent = '';
+        if (lede) lede.textContent = 'No discovery run yet — run discover to populate the topic map.';
         return;
       }
       meta.textContent = `Run #${map.run_id} · ${map.model} · ${map.prompt_version} · ${map.status} · ${map.created_at}`;
-      const topics = map.topics || [];
+
+      const topics = (map.topics || []).slice();
       if (!topics.length) {
+        canvas.classList.remove('is-focused');
+        state.focusedTopic = null;
         grid.innerHTML = '<div class="empty">Latest discovery run produced no topic assignments.</div>';
+        if (lede) lede.textContent = '0 topics in this run.';
         return;
       }
+
       const lowThreshold = (typeof map.low_confidence_threshold === 'number') ? map.low_confidence_threshold : 0.5;
       const newTopicNames = new Set(Array.isArray(map.new_topic_names) ? map.new_topic_names : []);
+      const totalEpisodes = topics.reduce((acc, t) => acc + (t.episode_count || 0), 0);
+      const subtopicTotal = topics.reduce((acc, t) => acc + (t.subtopic_count || (t.subtopics ? t.subtopics.length : 0)), 0);
+
+      if (lede) {
+        lede.innerHTML = `${topics.length} topics · ${totalEpisodes} episodes assigned · ${subtopicTotal} subtopics — sticky renames you make here persist across re-runs.`;
+      }
+
+      // Sort
+      if (state.overviewSort === 'az') {
+        topics.sort((a, b) => a.name.localeCompare(b.name));
+      } else {
+        topics.sort((a, b) => (b.episode_count || 0) - (a.episode_count || 0));
+      }
+
+      // Resolve focus
+      const focusedName = state.focusedTopic;
+      const focusedTopic = focusedName ? topics.find((t) => t.name === focusedName) : null;
+      const isFocused = !!focusedTopic;
+      canvas.classList.toggle('is-focused', isFocused);
+
+      // Minimap (always render, hidden via CSS in overview state)
+      minimap.innerHTML = `
+        <div class="minimap-head">
+          <div class="eyebrow">Topology</div>
+          <span class="mono">${topics.length} pillars · ${totalEpisodes} videos</span>
+        </div>
+        ${topics.map((t) => {
+          const subCount = t.subtopic_count || (t.subtopics ? t.subtopics.length : 0);
+          const isActive = focusedName && t.name === focusedName;
+          return `
+            <div class="mm-row${isActive ? ' is-focus' : ''}" data-topic-name="${escapeHtml(t.name)}" onclick="focusTopic(this.dataset.topicName)">
+              <span class="mm-name">${escapeHtml(t.name)}</span>
+              <span class="mm-count">${escapeHtml(t.episode_count || 0)} videos · ${escapeHtml(subCount)} sub</span>
+            </div>
+          `;
+        }).join('')}
+        <div class="minimap-back">
+          <button onclick="focusTopic(null)">← back to overview</button>
+        </div>
+      `;
+
+      // Overview pillar grid
       grid.innerHTML = topics.map((topic) => {
-        const confidence = (topic.avg_confidence == null) ? null : Math.max(0, Math.min(1, topic.avg_confidence));
-        const pct = (confidence == null) ? '—' : `${Math.round(confidence * 100)}%`;
-        const barClass = (confidence != null && confidence < lowThreshold) ? 'low' : '';
-        const barWidth = (confidence == null) ? 0 : Math.round(confidence * 100);
-        const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
-        const sortedEpisodes = sortDiscoveryEpisodes(topic.episodes, sortMode);
-        const episodeListHtml = sortedEpisodes.length
-          ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItem(ep, topic.name, lowThreshold, true)).join('')}</ol>`
-          : '<div class="muted discovery-episode-empty">No episodes assigned in this run.</div>';
-        const sortRowHtml = (topic.episodes && topic.episodes.length)
-          ? `<div class="discovery-episode-sort-row">
-              <label>Sort
-                <select class="discovery-episode-sort"
-                        data-discovery-sort
-                        data-topic-name="${escapeHtml(topic.name)}"
-                        onchange="setDiscoveryEpisodeSort(this.dataset.topicName, this.value)">
-                  <option value="recency" ${sortMode === 'recency' ? 'selected' : ''}>Recency</option>
-                  <option value="confidence" ${sortMode === 'confidence' ? 'selected' : ''}>Confidence</option>
-                </select>
-              </label>
-            </div>`
-          : '';
-        const subtopicBucketsHtml = renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold);
-        const subtopicCount = topic.subtopic_count || (topic.subtopics ? topic.subtopics.length : 0);
+        const subs = (topic.subtopics || []).map((s) => s.name);
+        const subCount = topic.subtopic_count || subs.length;
         const newBadgeHtml = newTopicNames.has(topic.name)
           ? '<span class="discovery-topic-new-badge">New</span>'
           : '';
+        const dgrid = dotGridHtml(topic.episodes, lowThreshold);
+        const pct = highConfidencePct(topic.episodes, lowThreshold);
+        const pctLabel = (pct == null) ? '—' : `${pct}% high-confidence`;
+        const chipsHtml = subs.length
+          ? `<div class="chips">${subs.slice(0, 6).map((s) => `<span class="chip">${escapeHtml(s)}</span>`).join('')}${subs.length > 6 ? `<span class="chip">+${subs.length - 6}</span>` : ''}</div>`
+          : `<div class="chips"><span class="chip soft">${escapeHtml(subCount)} subtopics</span></div>`;
+        const isActive = focusedName && topic.name === focusedName;
         return `
-          <article class="topic-card discovery-topic-card">
-            <div class="discovery-topic-header">
+          <article class="pillar topic-card discovery-topic-card${isActive ? ' is-active' : ''}"
+                   data-topic-name="${escapeHtml(topic.name)}"
+                   onclick="focusTopic(this.dataset.topicName)">
+            <div class="pillar-head discovery-topic-header">
               <h3>${escapeHtml(topic.name)}${newBadgeHtml}</h3>
-              <div class="discovery-topic-actions">
-                <button class="discovery-topic-rename"
-                        type="button"
-                        data-topic-name="${escapeHtml(topic.name)}"
-                        onclick="renameDiscoveryTopic(this.dataset.topicName)">Rename</button>
-                <button class="discovery-topic-merge"
-                        type="button"
-                        data-topic-name="${escapeHtml(topic.name)}"
-                        onclick="mergeDiscoveryTopic(this.dataset.topicName)">Merge</button>
-                <button class="discovery-topic-split"
-                        type="button"
-                        data-topic-name="${escapeHtml(topic.name)}"
-                        onclick="splitDiscoveryTopic(this.dataset.topicName)">Split</button>
-              </div>
+              <span class="count">${escapeHtml(topic.episode_count || 0)} videos</span>
             </div>
-            <div class="topic-stats">
-              <div class="topic-stat"><span class="k">Episodes</span><strong>${escapeHtml(topic.episode_count)}</strong></div>
-              <div class="topic-stat"><span class="k">Subtopics</span><strong>${escapeHtml(subtopicCount)}</strong></div>
-              <div class="topic-stat"><span class="k">Avg confidence</span><strong>${escapeHtml(pct)}</strong></div>
+            ${chipsHtml}
+            <div class="pillar-foot">
+              ${dgrid}
+              <span class="pct">${escapeHtml(pctLabel)}</span>
             </div>
-            <div class="confidence-bar ${barClass}"><span style="width:${barWidth}%"></span></div>
-            ${subtopicBucketsHtml}
-            ${sortRowHtml}
-            ${episodeListHtml}
           </article>
         `;
       }).join('');
+
+      // Focused state
+      if (isFocused) {
+        focusedWrap.innerHTML = renderFocusedTopic(focusedTopic, lowThreshold, newTopicNames);
+      } else {
+        focusedWrap.innerHTML = '';
+      }
+    }
+
+    function renderFocusedTopic(topic, lowThreshold, newTopicNames) {
+      const subs = topic.subtopics || [];
+      const subCount = topic.subtopic_count || subs.length;
+      const sortMode = discoveryEpisodeSortByTopic.get(topic.name) || DEFAULT_DISCOVERY_SORT;
+
+      // Subtopic tab strip — "All" + each subtopic + "Unassigned"
+      const unassigned = topic.unassigned_within_topic || [];
+      const tabs = [{ name: '__all', label: 'All', count: topic.episode_count || 0 }];
+      subs.forEach((s) => tabs.push({ name: s.name, label: s.name, count: s.episode_count || 0 }));
+      if (unassigned.length) tabs.push({ name: '__unassigned', label: 'Unassigned', count: unassigned.length });
+      const activeSub = state.activeSubtopic || '__all';
+      const tabsHtml = `
+        <div class="subtopic-tabs">
+          ${tabs.map((t) => `
+            <button type="button"
+                    class="subtopic-tab${t.name === activeSub ? ' is-active' : ''}"
+                    data-sub="${escapeHtml(t.name)}"
+                    onclick="setActiveSubtopic(this.dataset.sub === '__all' ? null : this.dataset.sub)">
+              ${escapeHtml(t.label)}<span class="count">· ${escapeHtml(t.count)}</span>
+            </button>
+          `).join('')}
+        </div>
+      `;
+
+      // Episode list — filter by active subtopic if set
+      let episodes = [];
+      let bucketsHtml = '';
+      if (activeSub === '__unassigned') {
+        episodes = unassigned;
+      } else if (activeSub === '__all') {
+        // Show subtopic accordions (legacy structure expected by tests) + flat list
+        bucketsHtml = renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold);
+        episodes = topic.episodes || [];
+      } else {
+        const bucket = subs.find((s) => s.name === activeSub);
+        episodes = bucket ? (bucket.episodes || []) : [];
+      }
+      const sortedEpisodes = sortDiscoveryEpisodes(episodes, sortMode);
+      const showAlsoIn = activeSub === '__all';
+      const episodeListHtml = sortedEpisodes.length
+        ? `<ol class="discovery-episode-list">${sortedEpisodes.map((ep) => renderDiscoveryEpisodeItemFocused(ep, topic.name, activeSub, lowThreshold, showAlsoIn)).join('')}</ol>`
+        : '<div class="muted discovery-episode-empty">No episodes in this view.</div>';
+
+      const sortRowHtml = (topic.episodes && topic.episodes.length)
+        ? `<div class="discovery-episode-sort-row">
+            <label>Sort
+              <select class="discovery-episode-sort"
+                      data-discovery-sort
+                      data-topic-name="${escapeHtml(topic.name)}"
+                      onchange="setDiscoveryEpisodeSort(this.dataset.topicName, this.value)">
+                <option value="recency" ${sortMode === 'recency' ? 'selected' : ''}>Recency</option>
+                <option value="confidence" ${sortMode === 'confidence' ? 'selected' : ''}>Confidence</option>
+              </select>
+            </label>
+          </div>`
+        : '';
+
+      const newBadgeHtml = newTopicNames.has(topic.name)
+        ? '<span class="discovery-topic-new-badge">New</span>'
+        : '';
+
+      return `
+        <div class="focus-head">
+          <div>
+            <div class="eyebrow">Focus</div>
+            <h1>${escapeHtml(topic.name)}${newBadgeHtml}</h1>
+            <p class="lede">${escapeHtml(topic.episode_count || 0)} videos across ${escapeHtml(subCount)} subtopics. Sticky renames you make here persist across re-runs of discovery.</p>
+          </div>
+          <div class="focus-actions discovery-topic-actions">
+            <button class="discovery-topic-rename" type="button"
+                    data-topic-name="${escapeHtml(topic.name)}"
+                    onclick="renameDiscoveryTopic(this.dataset.topicName)">✎ Rename</button>
+            <button class="discovery-topic-merge" type="button"
+                    data-topic-name="${escapeHtml(topic.name)}"
+                    onclick="mergeDiscoveryTopic(this.dataset.topicName)">⇆ Merge</button>
+            <button class="discovery-topic-split" type="button"
+                    data-topic-name="${escapeHtml(topic.name)}"
+                    onclick="splitDiscoveryTopic(this.dataset.topicName)">＋ Split</button>
+          </div>
+        </div>
+        ${tabsHtml}
+        ${sortRowHtml}
+        ${activeSub === '__all' ? bucketsHtml : ''}
+        ${activeSub === '__all' ? '<h3 class="eyebrow" style="margin-top:24px;">All episodes</h3>' : ''}
+        ${episodeListHtml}
+      `;
+    }
+
+    // Episode row used in focused state — adds the design's action column.
+    function renderDiscoveryEpisodeItemFocused(episode, topicName, activeSub, lowThreshold, showAlsoIn) {
+      const threshold = (typeof lowThreshold === 'number') ? lowThreshold : 0.5;
+      const c = (episode.confidence == null) ? null : Math.max(0, Math.min(1, episode.confidence));
+      const pct = (c == null) ? '—' : `${Math.round(c * 100)}%`;
+      const lowClass = (c != null && c < threshold) ? ' low' : '';
+      const reasonHtml = episode.reason
+        ? `<div class="discovery-episode-reason">${escapeHtml(episode.reason)}</div>`
+        : '';
+      const thumbHtml = episode.thumbnail_url
+        ? `<img class="discovery-episode-thumb" alt="" loading="lazy" src="${escapeHtml(episode.thumbnail_url)}">`
+        : '<div class="discovery-episode-thumb placeholder" aria-hidden="true"></div>';
+      const alsoIn = (showAlsoIn && Array.isArray(episode.also_in)) ? episode.also_in : [];
+      const alsoInHtml = alsoIn.length
+        ? `<span class="discovery-episode-also-in">also in: ${alsoIn.map((name) => escapeHtml(name)).join(', ')}</span>`
+        : '';
+      const watchUrl = episode.youtube_video_id
+        ? `https://www.youtube.com/watch?v=${encodeURIComponent(episode.youtube_video_id)}`
+        : null;
+      const watchBtn = watchUrl
+        ? `<a class="primary-action" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:6px 10px;font-size:12px;border-radius:8px;" href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener">▶ Watch</a>`
+        : '';
+      const subForButton = (activeSub && activeSub !== '__all' && activeSub !== '__unassigned') ? activeSub : null;
+      const wrongTopicBtn = `<button class="discovery-episode-wrong" type="button"
+                onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(episode.youtube_video_id || '')}, null)'>✗ Wrong topic</button>`;
+      const wrongSubBtn = subForButton
+        ? `<button class="subtopic-video-wrong" type="button" style="margin-left:0;"
+                onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(episode.youtube_video_id || '')}, ${JSON.stringify(subForButton)})'>✗ Wrong subtopic</button>`
+        : '';
+      return `
+        <li class="discovery-episode${lowClass}">
+          ${thumbHtml}
+          <div class="discovery-episode-body">
+            <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
+            <div class="discovery-episode-meta">
+              <span class="discovery-episode-confidence">conf ${escapeHtml(pct)}</span>
+              <span>${escapeHtml(episode.youtube_video_id || '')}</span>
+              ${alsoInHtml}
+            </div>
+            ${reasonHtml}
+          </div>
+          <div class="discovery-episode-actions">
+            ${watchBtn}
+            ${wrongTopicBtn}
+            ${wrongSubBtn}
+          </div>
+        </li>
+      `;
     }
 
     function renderDiscoverySubtopicBuckets(topic, sortMode, lowThreshold) {
@@ -1961,6 +2982,10 @@ HTML_PAGE = """<!doctype html>
     }
 
     document.getElementById('refresh-btn').addEventListener('click', () => fetchState().catch((error) => setStatus(error.message, true)));
+    document.getElementById('overview-sort-eps').addEventListener('click', () => setOverviewSort('episodes'));
+    document.getElementById('overview-sort-az').addEventListener('click', () => setOverviewSort('az'));
+    document.getElementById('discard-run-btn').addEventListener('click', () => setStatus('Discard-run is not yet wired — coming soon.', true));
+    document.getElementById('mark-caught-up-btn').addEventListener('click', () => setStatus('Mark-caught-up is not yet wired — coming soon.', true));
     document.getElementById('run-select').addEventListener('change', () => fetchState().catch((error) => setStatus(error.message, true)));
     document.getElementById('topic-select').addEventListener('change', () => {
       const newTopic = selectedTopicName();

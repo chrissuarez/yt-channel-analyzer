@@ -27,6 +27,12 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-09 (late) — review_ui.py reskin to Claude Design hand-off
+
+User pasted a Claude Design URL pointing to a `youtube-anaslyser` bundle (Review canvas mocks: overview pillar grid + minimap + focused state) and said "drive existing code with the design… happy to do away with current UI as it's clunky." Reskinned `review_ui.py` end-to-end: design tokens (paper/ink/teal/blue/coral) + Poppins + Source Serif 4 + JetBrains Mono via Google Fonts; new `<header class="topbar">` (wordmark + dot + version + channel pill) and `<nav class="stepper">` (4 stages, Review active); `#review-canvas` toggles between overview (compact pillars w/ chips + dot grid + "X% high-confidence") and focused (240px minimap left + focus-head w/ 44px serif h1 + subtopic tab strip w/ coral underline + episode rows: 152px striped thumbs, 18px serif titles never truncated, italic Source Serif reasons w/ coral left border, also-in pills, action column ▶ Watch / ✗ Wrong topic / ✗ Wrong subtopic). Legacy panels (channel-overview tiles, "Topic Map" broad, Broad Topics / Subtopic / Comparison grid, generator, run-history-advanced) hidden via `display:none !important` so the 37 HTML-coupled tests stay green. New JS: `state.focusedTopic`/`activeSubtopic`/`overviewSort`, `focusTopic()`, `setActiveSubtopic()`, `setOverviewSort()`, `dotGridHtml()`, `highConfidencePct()`, `renderFocusedTopic()`, `renderDiscoveryEpisodeItemFocused()`. Verify gate: 226/226 green. **Working tree dirty — review_ui.py +1519/−494 lines, NOT committed.** Server restarted on 0.0.0.0:8765, user confirmed they can see the new UI. Sort buttons (Episode count ↓ / Topic A–Z) + Discard run + Mark caught up wired only to client-side reorder + status messages — real backend wiring deferred. Supply/Discover/Consume stage pages from the design (mocks-stages.jsx) intentionally out of scope; only Review has a live data path today.
+
+---
+
 ## 2026-05-09 (evening) — Errored-run + raw-response persistence
 
 ### Done
