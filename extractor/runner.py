@@ -188,9 +188,24 @@ class Extractor:
         rendered = prompt.render(context)
         raw_text = self._runner.run_single(prompt=prompt, rendered=rendered)
         first_usage = getattr(self._runner, "last_usage", None)
+        first_stop_reason = getattr(self._runner, "last_stop_reason", None)
         try:
             data = _parse(raw_text, prompt.schema)
         except SchemaValidationError:
+            if first_stop_reason == "max_tokens":
+                # Output was truncated at max_tokens — retrying is deterministic-fail and wasteful.
+                _insert_audit_row(
+                    self._connection,
+                    prompt=prompt,
+                    rendered=rendered,
+                    runner=self._runner,
+                    is_batch=is_batch,
+                    batch_size=batch_size,
+                    parse_status="failed",
+                    correlation_id=correlation_id,
+                    usage=first_usage,
+                )
+                raise
             _insert_audit_row(
                 self._connection,
                 prompt=prompt,

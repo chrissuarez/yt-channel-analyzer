@@ -35,11 +35,13 @@ class FakeLLMRunner:
         self._responses: dict[tuple[str, str], deque[dict]] = defaultdict(deque)
         self._batch_responses: dict[tuple[str, str], deque[dict]] = defaultdict(deque)
         self._usages: deque[dict[str, int] | None] = deque()
+        self._stop_reasons: deque[str | None] = deque()
         self._batch_usages: list[dict[str, int] | None] = []
         self.calls: list[FakeCall] = []
         self.batch_submissions = 0
         self.batch_supported = batch_supported
         self.last_usage: dict[str, int] | None = None
+        self.last_stop_reason: str | None = None
         self.last_batch_usages: list[dict[str, int] | None] = []
 
     def add_response(self, name: str, version: str, payload: dict) -> None:
@@ -58,6 +60,10 @@ class FakeLLMRunner:
         """Queue a per-call usage dict to be exposed via ``last_usage`` after each ``run_single``."""
         self._usages.append({"input_tokens": input_tokens, "output_tokens": output_tokens})
 
+    def queue_stop_reason(self, stop_reason: str | None) -> None:
+        """Queue a per-call ``stop_reason`` to be exposed via ``last_stop_reason`` after each ``run_single``."""
+        self._stop_reasons.append(stop_reason)
+
     def queue_batch_usages(self, usages: list[dict[str, int] | None]) -> None:
         """Set ``last_batch_usages`` to be exposed after the next ``run_batch_submission``."""
         self._batch_usages = list(usages)
@@ -72,6 +78,9 @@ class FakeLLMRunner:
                 f"FakeLLMRunner: no canned response for {prompt.name}@{prompt.version}"
             )
         self.last_usage = self._usages.popleft() if self._usages else None
+        self.last_stop_reason = (
+            self._stop_reasons.popleft() if self._stop_reasons else None
+        )
         return json.dumps(queue.popleft())
 
     def supports_batch(self) -> bool:

@@ -268,6 +268,92 @@ class RunOneTests(_RegistryIsolation):
         self.assertEqual(statuses, ["retry", "ok"])
 
 
+class TruncationRetrySkipTests(_RegistryIsolation):
+    """When a parse failure follows ``stop_reason=max_tokens``, retrying is a
+    deterministic-fail and just doubles spend. Skip the retry."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        register_prompt(
+            name="p", version="1.0.0", render=_render, schema=SIMPLE_SCHEMA, system="sys"
+        )
+
+    def test_truncation_skips_retry_and_records_failed(self) -> None:
+        fake = FakeLLMRunner()
+        fake.queue_responses("p", "1.0.0", [{"topic": "Health"}])  # missing confidence
+        fake.queue_stop_reason("max_tokens")
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            with self.assertRaises(SchemaValidationError):
+                extractor.run_one("p", "1.0.0", {"title": "x"})
+            statuses = [
+                r["parse_status"]
+                for r in connection.execute(
+                    "SELECT parse_status FROM llm_calls ORDER BY id"
+                ).fetchall()
+            ]
+        self.assertEqual(len(fake.calls), 1, "must not retry on truncation")
+        self.assertEqual(statuses, ["failed"])
+
+    def test_non_truncation_parse_failure_still_retries(self) -> None:
+        """Regression guard: only ``stop_reason=max_tokens`` short-circuits."""
+        fake = FakeLLMRunner()
+        fake.queue_responses("p", "1.0.0", [
+            {"topic": "Health"},  # malformed
+            {"topic": "Health", "confidence": 0.5},
+        ])
+        fake.queue_stop_reason("end_turn")
+        fake.queue_stop_reason("end_turn")
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            result = extractor.run_one("p", "1.0.0", {"title": "x"})
+            statuses = [
+                r["parse_status"]
+                for r in connection.execute(
+                    "SELECT parse_status FROM llm_calls ORDER BY id"
+                ).fetchall()
+            ]
+        self.assertEqual(result.parse_status, "retry")
+        self.assertEqual(len(fake.calls), 2)
+        self.assertEqual(statuses, ["retry", "ok"])
+
+    def test_missing_stop_reason_still_retries(self) -> None:
+        """Fixtures that don't queue a stop_reason should fall back to retry-once."""
+        fake = FakeLLMRunner()
+        fake.queue_responses("p", "1.0.0", [
+            {"topic": "Health"},
+            {"topic": "Health", "confidence": 0.5},
+        ])
+        with TemporaryDirectory() as td:
+            connection = _open_db(td)
+            extractor = Extractor(connection=connection, runner=fake)
+            result = extractor.run_one("p", "1.0.0", {"title": "x"})
+        self.assertEqual(result.parse_status, "retry")
+        self.assertEqual(len(fake.calls), 2)
+
+
+class AnthropicRunnerConfigTests(unittest.TestCase):
+    """Constructor wiring for ``AnthropicRunner`` — no network."""
+
+    def test_default_max_tokens_matches_haiku_4_5_ceiling(self) -> None:
+        from yt_channel_analyzer.extractor.anthropic_runner import (
+            DEFAULT_MAX_TOKENS,
+            AnthropicRunner,
+        )
+        runner = AnthropicRunner(api_key="sk-test")
+        self.assertEqual(DEFAULT_MAX_TOKENS, 64000)
+        self.assertEqual(runner._max_tokens, DEFAULT_MAX_TOKENS)
+        self.assertIsNone(runner.last_stop_reason)
+        self.assertEqual(runner.last_batch_stop_reasons, [])
+
+    def test_max_tokens_override_respected(self) -> None:
+        from yt_channel_analyzer.extractor.anthropic_runner import AnthropicRunner
+        runner = AnthropicRunner(api_key="sk-test", max_tokens=8192)
+        self.assertEqual(runner._max_tokens, 8192)
+
+
 class RunBatchTests(_RegistryIsolation):
     def setUp(self) -> None:
         super().setUp()

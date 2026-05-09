@@ -15,17 +15,27 @@ from yt_channel_analyzer.extractor.registry import Prompt
 
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
+DEFAULT_MAX_TOKENS = 64000
 
 
 class AnthropicRunner:
     provider = "anthropic"
 
-    def __init__(self, *, model: str = DEFAULT_MODEL, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        model: str = DEFAULT_MODEL,
+        api_key: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> None:
         self.model = model
         self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        self._max_tokens = max_tokens
         self._client: Any | None = None
         self.last_usage: dict[str, int] | None = None
+        self.last_stop_reason: str | None = None
         self.last_batch_usages: list[dict[str, int] | None] = []
+        self.last_batch_stop_reasons: list[str | None] = []
 
     def _ensure_client(self) -> Any:
         if self._client is not None:
@@ -46,11 +56,12 @@ class AnthropicRunner:
         client = self._ensure_client()
         message = client.messages.create(
             model=self.model,
-            max_tokens=4096,
+            max_tokens=self._max_tokens,
             system=prompt.system,
             messages=[{"role": "user", "content": rendered}],
         )
         self.last_usage = _extract_usage(message)
+        self.last_stop_reason = _extract_stop_reason(message)
         return _extract_text(message)
 
     def run_batch_submission(self, *, prompt: Prompt, rendered_prompts: list[str]) -> list[str]:
@@ -60,7 +71,7 @@ class AnthropicRunner:
                 "custom_id": f"req-{i}",
                 "params": {
                     "model": self.model,
-                    "max_tokens": 4096,
+                    "max_tokens": self._max_tokens,
                     "system": prompt.system,
                     "messages": [{"role": "user", "content": rendered}],
                 },
@@ -76,11 +87,16 @@ class AnthropicRunner:
             time.sleep(2.0)
         results: dict[str, str] = {}
         usages: dict[str, dict[str, int] | None] = {}
+        stop_reasons: dict[str, str | None] = {}
         for entry in client.messages.batches.results(batch_id):
             results[entry.custom_id] = _extract_text(entry.result.message)
             usages[entry.custom_id] = _extract_usage(entry.result.message)
+            stop_reasons[entry.custom_id] = _extract_stop_reason(entry.result.message)
         self.last_batch_usages = [
             usages.get(f"req-{i}") for i in range(len(rendered_prompts))
+        ]
+        self.last_batch_stop_reasons = [
+            stop_reasons.get(f"req-{i}") for i in range(len(rendered_prompts))
         ]
         return [results[f"req-{i}"] for i in range(len(rendered_prompts))]
 
@@ -93,6 +109,11 @@ def _extract_text(message: Any) -> str:
         if text:
             texts.append(text)
     return "".join(texts)
+
+
+def _extract_stop_reason(message: Any) -> str | None:
+    reason = getattr(message, "stop_reason", None)
+    return str(reason) if reason is not None else None
 
 
 def _extract_usage(message: Any) -> dict[str, int] | None:

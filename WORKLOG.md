@@ -27,14 +27,36 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-10 — Discovery truncation fix (raise max_tokens + skip retry on truncation)
+
+Both halves of yesterday's smoke-test damage report addressed in one commit on `feat/issue-11-discovery-truncation-fix`. **A) Raised `AnthropicRunner.max_tokens` from `4096` → `64000`** (Haiku 4.5's published output ceiling, exposed as `DEFAULT_MAX_TOKENS` and a constructor kwarg so we can dial it down per call/model). Applied in both `run_single` and `run_batch_submission`. **B) `Extractor._run_single_with_retry` now short-circuits on `stop_reason="max_tokens"`** — captures `last_stop_reason` after each `run_single`, and on first `SchemaValidationError` checks it: if the response was truncated, writes the `parse_status="failed"` audit row directly and re-raises without a second LLM call. Non-truncation parse failures still take the existing retry-once path (regression-tested). `AnthropicRunner` exposes `last_stop_reason` (and `last_batch_stop_reasons` for batch entries); `FakeLLMRunner` gained `queue_stop_reason()` + `last_stop_reason` so tests can simulate truncation without monkeypatching. New class `TruncationRetrySkipTests` (3 tests: truncation→no-retry, non-truncation→retry-still-works, missing-stop-reason→retry-still-works) plus `AnthropicRunnerConfigTests` (2 tests: default = 64000, override respected). Verify gate green at **253** (~57s). No real LLM call in tests.
+
+### Why this matters
+
+Yesterday's $0.097 smoke spent **half** on a guaranteed-fail retry. Post-fix, the same truncation event would cost ~$0.048. And — more importantly — at `max_tokens=64000` the DOAC prompt won't truncate at all; expected real cost on DOAC discovery should now hover around the cheatsheet's `~$0.019/15 episodes` ballpark scaled to channel size, with no retry doubling.
+
+### Next
+- Real-LLM smoke test (run `discover --real` against `tmp/doac-sticky.sqlite` with `RALPH_ALLOW_REAL_LLM=1`) to confirm a successful end-to-end DOAC run at the new ceiling. **HITL — costs real money.** Skip if that channel's discovery prompt happens to need >64K output (in which case we'd chunk batches).
+- Supply pagination (still: `limit=50` hard-coded in `_build_supply_videos`).
+- Wire `Edit channel` form (smaller slice).
+- Optional: stream/poll in-flight discovery status — modal still sits frozen during the synchronous request.
+
+---
+
 ## 2026-05-10 — Wire Run discovery button (Discover page)
 
 Discover-page `Run discovery →` button is no longer a toast: clicks open a confirm modal, then POST `/api/discover` with `{mode}` ∈ {`stub`,`real`}. Server endpoint dispatches to an injectable `discover_runner` (default `_default_discover_runner`); stub mode runs `run_discovery` with `stub_llm` (`STUB_MODEL`/`STUB_PROMPT_VERSION`); real mode opens a sqlite connection, calls `make_real_llm_callable(connection)` (the `RALPH_ALLOW_REAL_LLM=1` gate already lives there as a `RuntimeError`) and runs `run_discovery` with `DEFAULT_MODEL`/`DISCOVERY_PROMPT_VERSION`, closing the connection in a `finally`. The gate's `RuntimeError` is caught in `_discover` and re-raised as `ReviewUIError` so the existing 400 handler surfaces the message verbatim. `ReviewUIApp.__init__` takes optional `discover_runner` kwarg — same DI shape as `channel_metadata_fetcher`. Mode-toggle pills became real `<button>` elements bound to `setDiscoverMode`; default mode is `--real`. Reusable HTML/CSS modal (`#discover-confirm-modal`, paper/ink palette, backdrop click + Escape close). On success, JS sets `state.activeDiscoveryRunId = run_id`, switches to `review` stage, refetches state — Review snaps to the new run. On 400, status bar shows the gate hint verbatim. `UI_REVISION` bumped to `2026-05-10.9-run-discovery-button-wired-…`. 7 new tests in `DiscoverEndpointTests` (stub success, real-no-env 400, real-with-env injected runner, missing-mode 400, unknown-mode 400, button-HTML wired, UI_REVISION advance). Verify gate green at 248 (~56s). No real LLM call in tests.
 
+### Smoke (real, post-commit)
+
+`POST /api/discover {mode:"real"}` with `RALPH_ALLOW_REAL_LLM=1` exported reached Anthropic and the failure was correctly logged: `discovery_runs` row 5 → `status=error` with parse-failure message; `llm_calls` rows 4/5 both `correlation_id=5`. Wiring works end-to-end. Real spend: **$0.097** ($0.048642 × 2). The 400 surfaced was a pre-existing bug, not a regression: AnthropicRunner's `max_tokens=4096` truncates DOAC's discovery output mid-string, and `Extractor.run_one`'s retry-once retries the deterministic ceiling failure, doubling spend.
+
 ### Next
+- **Raise `AnthropicRunner.max_tokens`** (likely to model max) or chunk the discovery prompt — current 4096 truncates DOAC output. Surfaced by today's smoke test.
+- **Skip retry on `parse_status=failed` from truncation** — deterministic, no point retrying. Halves spend on this failure mode.
 - Supply pagination (still: `limit=50` hard-coded in `_build_supply_videos`).
 - Wire `Edit channel` form (smaller slice).
-- Optional: surface in-flight discovery status better than a frozen modal — Phase A scope keeps it synchronous for now (~17s real).
+- Optional: stream/poll in-flight discovery status — currently the modal sits on "Running…" for the full ~60s.
 
 ## 2026-05-10 — Wire Re-ingest button (Supply page)
 
