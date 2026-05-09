@@ -1234,6 +1234,69 @@ class DiscoveryStatePayloadTests(unittest.TestCase):
             names = {t["name"] for t in topic_map["topics"]}
             self.assertEqual(names, {"Fresh Topic"})
 
+    def test_state_payload_discovery_run_id_selects_specific_run(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            first_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Old Topic"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Old Topic",
+                            confidence=0.5,
+                            reason="early run",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            second_run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Fresh Topic"],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Fresh Topic",
+                            confidence=0.95,
+                            reason="latest run",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            self.assertNotEqual(first_run_id, second_run_id)
+
+            payload_default = build_state_payload(db_path)
+            self.assertEqual(
+                payload_default["discovery_topic_map"]["run_id"], second_run_id
+            )
+
+            payload_first = build_state_payload(
+                db_path, discovery_run_id=first_run_id
+            )
+            topic_map_first = payload_first["discovery_topic_map"]
+            self.assertEqual(topic_map_first["run_id"], first_run_id)
+            self.assertEqual(
+                {t["name"] for t in topic_map_first["topics"]}, {"Old Topic"}
+            )
+
+            payload_missing = build_state_payload(
+                db_path, discovery_run_id=999_999
+            )
+            self.assertIsNone(payload_missing["discovery_topic_map"])
+
     def test_state_payload_episode_dicts_carry_also_in_for_multi_topic(self) -> None:
         from yt_channel_analyzer.review_ui import build_state_payload
 

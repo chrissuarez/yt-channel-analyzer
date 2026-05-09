@@ -62,7 +62,7 @@ from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.6-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.7-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
@@ -1804,9 +1804,22 @@ HTML_PAGE = """<!doctype html>
       display: grid;
       grid-template-columns: 70px 1.4fr 1fr 0.8fr 0.9fr 0.55fr 28px;
       gap: 18px;
-      padding: 20px 0;
+      padding: 20px 12px;
+      margin: 0 -12px;
       border-bottom: 1px solid var(--rule);
       align-items: flex-start;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background-color 0.12s ease;
+    }
+    .discover-run-row:hover {
+      background: rgba(15, 110, 86, 0.04);
+    }
+    .discover-run-row.is-active {
+      background: rgba(15, 110, 86, 0.08);
+    }
+    .discover-run-row.is-active .dr-chevron {
+      color: var(--teal);
     }
     .discover-run-row .dr-cost {
       font-family: var(--mono);
@@ -2307,6 +2320,7 @@ HTML_PAGE = """<!doctype html>
       overviewSort: 'episodes',
       activeStage: 'review',
       supplySort: 'newest',
+      activeDiscoveryRunId: null,
     };
 
     function setActiveStage(stage) {
@@ -2415,6 +2429,9 @@ HTML_PAGE = """<!doctype html>
       if (runId) params.set('run_id', String(runId));
       if (topic) params.set('topic', topic);
       if (subtopic) params.set('subtopic', subtopic);
+      if (state.activeDiscoveryRunId != null) {
+        params.set('discovery_run_id', String(state.activeDiscoveryRunId));
+      }
       const response = await fetch(`/api/state?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Failed to load state');
@@ -3603,6 +3620,7 @@ HTML_PAGE = """<!doctype html>
         if (c < 0.001) return { text: '<$0.001', empty: false };
         return { text: '$' + c.toFixed(c < 0.01 ? 4 : 3), empty: false };
       };
+      const loadedRunId = payload.discovery_topic_map?.run_id ?? null;
       list.innerHTML = runs.map((r) => {
         const statusPill = r.status === 'success'
           ? '<span class="pill pill-good"><span class="pill-dot"></span>success</span>'
@@ -3612,8 +3630,11 @@ HTML_PAGE = """<!doctype html>
           : '';
         const cost = formatCost(r.cost_estimate_usd);
         const costClass = cost.empty ? 'dr-cost dr-cost-empty' : 'dr-cost';
+        const isActive = loadedRunId != null && Number(loadedRunId) === Number(r.id);
+        const rowClass = isActive ? 'discover-run-row is-active' : 'discover-run-row';
+        const disabled = r.status !== 'success';
         return `
-          <div class="discover-run-row">
+          <div class="${rowClass}" data-discovery-run-id="${r.id}" data-disabled="${disabled ? '1' : '0'}" role="button" tabindex="0" aria-current="${isActive ? 'true' : 'false'}">
             <span class="dr-num">#${r.id}</span>
             <div>
               <div><span class="dr-model">${escapeHtml(r.model)}</span> <span class="dr-prompt">· prompt ${escapeHtml(r.prompt_version)}</span></div>
@@ -3627,6 +3648,37 @@ HTML_PAGE = """<!doctype html>
           </div>
         `;
       }).join('');
+      list.querySelectorAll('.discover-run-row').forEach((row) => {
+        const idAttr = row.getAttribute('data-discovery-run-id');
+        const disabled = row.getAttribute('data-disabled') === '1';
+        if (!idAttr) return;
+        const handler = () => {
+          if (disabled) {
+            setStatus(`Run #${idAttr} errored — no topic map to review.`, true);
+            return;
+          }
+          selectDiscoveryRun(Number(idAttr));
+        };
+        row.addEventListener('click', handler);
+        row.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handler();
+          }
+        });
+      });
+    }
+
+    async function selectDiscoveryRun(runId) {
+      state.activeDiscoveryRunId = runId;
+      state.focusedTopic = null;
+      state.activeSubtopic = null;
+      setActiveStage('review');
+      try {
+        await fetchState();
+      } catch (err) {
+        setStatus(err.message || 'Failed to load discovery run', true);
+      }
     }
 
     function renderDiscover(payload) {
@@ -4470,17 +4522,29 @@ def _topics_introduced_in_run(
     return [row[0] for row in rows]
 
 
-def _build_discovery_topic_map(db_path: Path) -> dict[str, Any] | None:
+def _build_discovery_topic_map(
+    db_path: Path, *, run_id: int | None = None
+) -> dict[str, Any] | None:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
-        run_row = connection.execute(
-            """
-            SELECT id, channel_id, model, prompt_version, status, created_at
-            FROM discovery_runs
-            ORDER BY id DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        if run_id is None:
+            run_row = connection.execute(
+                """
+                SELECT id, channel_id, model, prompt_version, status, created_at
+                FROM discovery_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        else:
+            run_row = connection.execute(
+                """
+                SELECT id, channel_id, model, prompt_version, status, created_at
+                FROM discovery_runs
+                WHERE id = ?
+                """,
+                (int(run_id),),
+            ).fetchone()
         if run_row is None:
             return None
         new_topic_names = _topics_introduced_in_run(
@@ -4630,6 +4694,7 @@ def build_state_payload(
     topic_name: str | None = None,
     subtopic_name: str | None = None,
     sample_limit: int = 3,
+    discovery_run_id: int | None = None,
 ) -> dict[str, Any]:
     db_path = Path(db_path)
     try:
@@ -4829,7 +4894,7 @@ def build_state_payload(
         ),
     )
     topic_inventory = _build_topic_inventory(db_path, topic_name=selected_topic)
-    discovery_topic_map = _build_discovery_topic_map(db_path)
+    discovery_topic_map = _build_discovery_topic_map(db_path, run_id=discovery_run_id)
     latest_subtopic_run_id_by_topic = _latest_subtopic_run_ids_by_topic(db_path)
     if primary_channel is None:
         channel_overview = None
@@ -4912,13 +4977,22 @@ class ReviewUIApp:
                 run_id_raw = _normalize_text((query.get("run_id") or [None])[0])
                 topic_name = _normalize_text((query.get("topic") or [None])[0])
                 subtopic_name = _normalize_text((query.get("subtopic") or [None])[0])
+                discovery_run_id_raw = _normalize_text(
+                    (query.get("discovery_run_id") or [None])[0]
+                )
                 run_id = int(run_id_raw) if run_id_raw is not None else None
+                discovery_run_id = (
+                    int(discovery_run_id_raw)
+                    if discovery_run_id_raw is not None
+                    else None
+                )
                 payload = build_state_payload(
                     self.db_path,
                     run_id=run_id,
                     topic_name=topic_name,
                     subtopic_name=subtopic_name,
                     sample_limit=self.sample_limit,
+                    discovery_run_id=discovery_run_id,
                 )
                 return self._json_response(start_response, payload)
             if method == "POST" and path.startswith("/api/"):
