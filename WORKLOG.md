@@ -35,8 +35,13 @@ Both halves of yesterday's smoke-test damage report addressed in one commit on `
 
 Yesterday's $0.097 smoke spent **half** on a guaranteed-fail retry. Post-fix, the same truncation event would cost ~$0.048. And — more importantly — at `max_tokens=64000` the DOAC prompt won't truncate at all; expected real cost on DOAC discovery should now hover around the cheatsheet's `~$0.019/15 episodes` ballpark scaled to channel size, with no retry doubling.
 
+### Smoke (real, post-commit) + streaming follow-up
+
+First attempt against DOAC at `max_tokens=64000` failed client-side: `anthropic` SDK rejects non-streaming requests whose `max_tokens` implies >10min of expected completion (formula in `_base_client._calculate_nonstreaming_timeout`: `3600 * max_tokens / 128_000 > 600` → cutoff ~21K). No spend (SDK refused before sending). Followed up by switching `AnthropicRunner.run_single` to `client.messages.stream(...).get_final_message()` so callers can dial `max_tokens` to the model ceiling without tripping the gate. Batch path (`run_batch_submission`) untouched — async batches already side-step the synchronous-timeout rule.
+
+Smoke retry succeeded — `discovery_runs` row 7, **status=success**, 35.6s wall, 28162 input + 4557 output tokens, **cost $0.050947**. 7 topics + 34 subtopics across all 50 DOAC episodes; no truncation, no retry. The 4557-token output would have truncated at the old 4096 ceiling — direct confirmation that the fix unblocks DOAC. Cost vs yesterday's $0.097 = **47% reduction**, matching the predicted halving from skipping the retry. Verify gate stayed green at 253.
+
 ### Next
-- Real-LLM smoke test (run `discover --real` against `tmp/doac-sticky.sqlite` with `RALPH_ALLOW_REAL_LLM=1`) to confirm a successful end-to-end DOAC run at the new ceiling. **HITL — costs real money.** Skip if that channel's discovery prompt happens to need >64K output (in which case we'd chunk batches).
 - Supply pagination (still: `limit=50` hard-coded in `_build_supply_videos`).
 - Wire `Edit channel` form (smaller slice).
 - Optional: stream/poll in-flight discovery status — modal still sits frozen during the synchronous request.

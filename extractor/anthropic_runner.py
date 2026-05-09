@@ -54,12 +54,17 @@ class AnthropicRunner:
 
     def run_single(self, *, prompt: Prompt, rendered: str) -> str:
         client = self._ensure_client()
-        message = client.messages.create(
+        # Streaming is required by the SDK whenever max_tokens implies a
+        # potential completion >10min (>~21K tokens at the SDK's 128K/hour
+        # default). We always stream so the caller can dial max_tokens up
+        # to the model ceiling without tripping that gate.
+        with client.messages.stream(
             model=self.model,
             max_tokens=self._max_tokens,
             system=prompt.system,
             messages=[{"role": "user", "content": rendered}],
-        )
+        ) as stream:
+            message = stream.get_final_message()
         self.last_usage = _extract_usage(message)
         self.last_stop_reason = _extract_stop_reason(message)
         return _extract_text(message)
