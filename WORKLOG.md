@@ -27,6 +27,26 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-10 — CURRENT_STATE.md refresh + subtopic-autoheal slice 14 GREEN
+
+### Done
+- Refreshed CURRENT_STATE.md (was stuck at 2026-05-04 / start of Phase A) on main as `34a0097`. Captures Phase A complete, sticky-curation 3/3 paths validated, design hand-off + 16-commit GUI rebuild, three open follow-ups.
+- Branched `feat/issue-14-subtopic-autoheal`. Wrote `RunDiscoverySubtopicAutohealTests` (test_discovery.py:4536) — RED at `discovery.py:821` with expected ValueError, mirroring live Haiku run-10 failure.
+- Implemented `_autoheal_dangling_subtopic_refs(payload)` in `discovery.py`: walks assignments, synthesizes `DiscoverySubtopic(name=S, parent_topic=T)` for any `(T, S)` pair where T is declared in `payload.topics` but S isn't declared under T. Wired between `_apply_renames_to_payload` and the persistence loop in `run_discovery`. Dangling *topic* refs still raise — those need fresh data, not synthesis.
+- Reframed `test_validation_failure_persists_errored_run_with_raw_response` (test_discovery.py:4106): trigger swapped from dangling-subtopic (now auto-healed) to unknown `youtube_video_id`, preserving paid-failure-recovery coverage.
+- Reframed `test_assignment_subtopic_not_in_payload_raises` → `_is_autohealed` (test_discovery.py:4410): asserts the new positive contract on an empty-`subtopics[]` payload, complementing the autoheal test which seeds one pre-declared subtopic.
+- Verify gate green at **272 tests** (+1 net). All sticky-curation/persistence test classes happy.
+
+### Learned
+- Two existing strict-validation tests captured the old "raise on dangling subtopic" contract. Reframing both into positive-direction assertions (test name suffixes flipped from `_raises` to `_is_autohealed`) preserved the coverage slot rather than deleting tests.
+- `_autoheal_dangling_subtopic_refs` is a pure function on the payload — no DB read, no LLM call. Cheap to insert in front of the persistence loop, returns the original payload unchanged when no heal is needed.
+
+### Next
+- Live real-LLM smoke through the UI to confirm the prior run-10 failure mode now succeeds (cost: ~$0.05). Optional — the unit test mirrors the run-10 payload shape.
+- Other open threads from the design hand-off memory: server-side Supply sort; fuzzy-match fallback for sticky-curation chain (deferred until exact-match limitation actually bites).
+
+---
+
 ## 2026-05-10 — Stream/poll live smoke + validator divergence surfaced
 
 After `793b229` landed, restarted dev server (pid 26041) on `0.0.0.0:8765` against `tmp/doac-sticky.sqlite` with `RALPH_ALLOW_REAL_LLM=1`. Stub smoke: `POST /api/discover` returned in **~30ms** (vs ~17s blocking before); finished too fast for the 0.05s poll to catch `'running'`. Real-mode smoke (run 10): POST returned in 30ms, polls at t+0.5s/5s/10s/15s/20s all saw `status='running'` (5+ samples), poll at t+25s saw `'error'` with the full `error_message` propagated through `/api/discovery_runs/<id>`. **Async + polling contract validated end-to-end.** 404 + 400 paths confirmed (`/api/discovery_runs/99999` → 400 with "not found"; `/abc` → 400 with "invalid"). Audit trail intact: `discovery_runs[10].raw_response` 14803 bytes preserved; `llm_calls[8]` has `parse_status=ok`, `correlation_id=10`, `tokens_in=28162 / tokens_out=5062`, **$0.053472**.

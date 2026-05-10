@@ -4105,12 +4105,17 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
 
     def test_validation_failure_persists_errored_run_with_raw_response(self) -> None:
         """When the LLM returns a payload that fails downstream validation
-        (e.g. an assignment references a subtopic not declared in
-        payload.subtopics — the case that lost ~$0.019 on the 2026-05-08
-        run-1 retry), `run_discovery` must persist an errored
-        `discovery_runs` row carrying the raw payload + error message
-        instead of silently rolling back the whole tx and losing the
-        billed response.
+        (here: an assignment references a ``youtube_video_id`` that wasn't
+        in the discover input — i.e. data the model hallucinated),
+        `run_discovery` must persist an errored `discovery_runs` row
+        carrying the raw payload + error message instead of silently
+        rolling back the whole tx and losing the billed response.
+
+        Note: the dangling-subtopic case that originally surfaced this
+        error path on the 2026-05-08 run-1 retry is now auto-healed by
+        ``_autoheal_dangling_subtopic_refs`` (slice 14), so this test
+        uses an unknown-video trigger instead — that variant still
+        raises and exercises the same paid-failure-recovery code path.
         """
         import json
         from dataclasses import asdict
@@ -4119,7 +4124,6 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
             DISCOVERY_PROMPT_VERSION,
             DiscoveryAssignment,
             DiscoveryPayload,
-            DiscoverySubtopic,
             run_discovery,
         )
 
@@ -4127,19 +4131,19 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
             db_path = Path(tmpdir) / "test.sqlite3"
             _seed_channel_with_videos(db_path)
 
-            # Bad payload: assignment subtopic_name "Discipline" is not
-            # declared under topic "Brain" in payload.subtopics. Mirrors
-            # the real Haiku failure logged in /tmp/doac-sticky-run1-*.
+            # Bad payload: assignment references a youtube_video_id
+            # that wasn't in the discover input. Hits the "unknown
+            # video in discovery payload" branch — distinct from the
+            # auto-healed dangling-subtopic case.
             bad_payload = DiscoveryPayload(
                 topics=["Brain"],
-                subtopics=[DiscoverySubtopic(name="Sleep", parent_topic="Brain")],
+                subtopics=[],
                 assignments=[
                     DiscoveryAssignment(
-                        youtube_video_id="vid1",
+                        youtube_video_id="vid-hallucinated",
                         topic_name="Brain",
                         confidence=0.9,
-                        reason="dangling subtopic ref",
-                        subtopic_name="Discipline",
+                        reason="hallucinated video id",
                     ),
                 ],
             )
@@ -4164,7 +4168,7 @@ class RunDiscoveryErrorPathTests(unittest.TestCase):
                 ).fetchall()
                 self.assertEqual(len(runs), 1)
                 self.assertEqual(runs[0]["status"], "error")
-                self.assertIn("Discipline", runs[0]["error_message"])
+                self.assertIn("vid-hallucinated", runs[0]["error_message"])
 
                 stored = json.loads(runs[0]["raw_response"])
                 self.assertEqual(stored, asdict(bad_payload))
@@ -4403,7 +4407,14 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
                 )
             self.assertIn("Wellness", str(ctx.exception))
 
-    def test_assignment_subtopic_not_in_payload_raises(self) -> None:
+    def test_assignment_subtopic_not_in_payload_is_autohealed(self) -> None:
+        """Slice 14 changed this contract: a dangling subtopic ref under a
+        declared topic is auto-healed (synthesized into payload.subtopics)
+        rather than raising. This variant — with payload.subtopics empty
+        on entry — exercises the path where the healed list is built from
+        scratch, complementing RunDiscoverySubtopicAutohealTests which
+        seeds one pre-declared subtopic.
+        """
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.sqlite3"
             _seed_channel_with_videos(db_path)
@@ -4428,15 +4439,33 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
                 ],
             )
 
-            with self.assertRaises(ValueError) as ctx:
-                run_discovery(
-                    db_path,
-                    project_name="proj",
-                    llm=lambda videos: payload,
-                    model="stub",
-                    prompt_version="discovery-v2",
-                )
-            self.assertIn("Sleep", str(ctx.exception))
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: payload,
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                run_status = conn.execute(
+                    "SELECT status FROM discovery_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()["status"]
+                self.assertEqual(run_status, "success")
+
+                pairs = {
+                    (r["topic_name"], r["sub_name"])
+                    for r in conn.execute(
+                        """
+                        SELECT t.name AS topic_name, s.name AS sub_name
+                        FROM subtopics s
+                        JOIN topics t ON t.id = s.topic_id
+                        """
+                    ).fetchall()
+                }
+                self.assertEqual(pairs, {("Health", "Sleep")})
 
     def test_stub_llm_emits_one_subtopic_per_topic(self) -> None:
         from yt_channel_analyzer.discovery import (
@@ -4531,6 +4560,102 @@ class RunDiscoverySubtopicPersistenceTests(unittest.TestCase):
         finally:
             _registry_module._PROMPTS.clear()
             _registry_module._PROMPTS.update(saved)
+
+
+class RunDiscoverySubtopicAutohealTests(unittest.TestCase):
+    """Slice 14: when an assignment references a subtopic that the LLM
+    didn't declare in `payload.subtopics`, `run_discovery` auto-heals
+    the payload by appending a `DiscoverySubtopic(name=..., parent_topic=
+    assignment.topic_name)` before persistence — instead of raising
+    `ValueError` and forcing the user to re-pay for a fresh LLM call.
+
+    Surfaced on the 2026-05-10 live real-LLM smoke (run 10 on
+    `tmp/doac-sticky.sqlite`): Haiku 4.5, `stop_reason=end_turn`,
+    `parse_status=ok`, but the model assigned a subtopic name it never
+    declared. ~$0.05 lost per occurrence under the old strict-validator
+    behavior.
+
+    Auto-heal precondition: the assignment's `topic_name` *is* declared
+    in `payload.topics`. Dangling topic refs still raise — those need
+    fresh data, not synthesis.
+    """
+
+    def test_undeclared_subtopic_under_known_topic_is_autohealed(self) -> None:
+        from yt_channel_analyzer.discovery import (
+            DISCOVERY_PROMPT_VERSION,
+            DiscoverySubtopic,
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            # Mirrors the real Haiku failure: payload declares topic
+            # "Brain" + one subtopic "Sleep", but the assignment for
+            # vid1 references subtopic "Discipline" — never declared.
+            payload = DiscoveryPayload(
+                topics=["Brain"],
+                subtopics=[DiscoverySubtopic(name="Sleep", parent_topic="Brain")],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Brain",
+                        confidence=0.9,
+                        reason="dangling subtopic ref",
+                        subtopic_name="Discipline",
+                    ),
+                ],
+            )
+
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda _videos: payload,
+                model="stub",
+                prompt_version=DISCOVERY_PROMPT_VERSION,
+            )
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+
+                run_row = conn.execute(
+                    "SELECT status FROM discovery_runs WHERE id = ?",
+                    (run_id,),
+                ).fetchone()
+                self.assertEqual(run_row["status"], "success")
+
+                # Both the originally-declared subtopic and the
+                # auto-healed one land under topic "Brain".
+                pairs = {
+                    (r["topic_name"], r["sub_name"])
+                    for r in conn.execute(
+                        """
+                        SELECT t.name AS topic_name, s.name AS sub_name
+                        FROM subtopics s
+                        JOIN topics t ON t.id = s.topic_id
+                        """
+                    ).fetchall()
+                }
+                self.assertEqual(
+                    pairs, {("Brain", "Sleep"), ("Brain", "Discipline")}
+                )
+
+                # The dangling assignment lands on the auto-healed
+                # subtopic (vid1 → Discipline, NOT vid1 → Sleep).
+                rows = conn.execute(
+                    """
+                    SELECT v.youtube_video_id, s.name AS sub_name
+                    FROM video_subtopics vs
+                    JOIN videos v ON v.id = vs.video_id
+                    JOIN subtopics s ON s.id = vs.subtopic_id
+                    WHERE vs.discovery_run_id = ?
+                    """,
+                    (run_id,),
+                ).fetchall()
+                self.assertEqual(
+                    [(r["youtube_video_id"], r["sub_name"]) for r in rows],
+                    [("vid1", "Discipline")],
+                )
 
 
 class RunDiscoveryConfidencePersistenceTests(unittest.TestCase):

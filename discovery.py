@@ -562,6 +562,48 @@ def _apply_renames_to_payload(
     )
 
 
+def _autoheal_dangling_subtopic_refs(payload: DiscoveryPayload) -> DiscoveryPayload:
+    """Synthesize ``DiscoverySubtopic`` rows for assignment ``subtopic_name``s
+    the LLM referenced but forgot to declare in ``payload.subtopics``.
+
+    Surfaced 2026-05-10: Haiku 4.5 returns ``stop_reason=end_turn`` with a
+    well-formed payload that nonetheless assigns episodes to subtopic names
+    it never enumerated under a topic. Strict validation in the persistence
+    loop raises ``ValueError`` and the caller pays ~$0.05 to re-roll. The
+    fix: when an assignment references ``(topic_name=T, subtopic_name=S)``
+    and ``T`` *is* in ``payload.topics`` but ``S`` is not declared under
+    ``T`` in ``payload.subtopics``, append a ``DiscoverySubtopic(name=S,
+    parent_topic=T)``. Dangling *topic* refs (T itself missing) still raise
+    downstream — those need fresh data, not synthesis.
+    """
+    declared_topics = set(payload.topics)
+    declared_pairs: set[tuple[str, str]] = {
+        (sub.parent_topic, sub.name) for sub in payload.subtopics
+    }
+    healed: list[DiscoverySubtopic] = list(payload.subtopics)
+    seen_added: set[tuple[str, str]] = set()
+    for assignment in payload.assignments:
+        sub_name = assignment.subtopic_name
+        if not sub_name:
+            continue
+        topic_name = assignment.topic_name
+        if topic_name not in declared_topics:
+            continue
+        pair = (topic_name, sub_name)
+        if pair in declared_pairs or pair in seen_added:
+            continue
+        healed.append(DiscoverySubtopic(name=sub_name, parent_topic=topic_name))
+        seen_added.add(pair)
+
+    if not seen_added:
+        return payload
+    return DiscoveryPayload(
+        topics=payload.topics,
+        assignments=payload.assignments,
+        subtopics=healed,
+    )
+
+
 def _suppress_wrong_assignments_in_run(
     connection: sqlite3.Connection,
     channel_id: int,
@@ -741,6 +783,7 @@ def run_discovery(
         raw_payload = payload
         try:
             payload = _apply_renames_to_payload(connection, project_id, payload)
+            payload = _autoheal_dangling_subtopic_refs(payload)
 
             cursor = connection.cursor()
 
