@@ -27,6 +27,16 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-10 — Post-fix real-LLM smoke through the UI
+
+End-to-end UI flow exercised against `tmp/doac-sticky.sqlite` after truncation + streaming fixes (`b724fe1`, `2a77484`) and the `Run discovery` wiring (`ef07fac`). Server restarted with `RALPH_ALLOW_REAL_LLM=1` on `0.0.0.0:8765`. Click-path: Discover stage → Run discovery → Real → Confirm. `discovery_runs` row 8 → status=success, Haiku 4.5, `discovery-v4`, no error. `llm_calls` row 7 → `parse_status=ok`, `correlation_id=8`, 28162 in / 4952 out, **$0.052922** (within 4% of the prior CLI smoke's $0.050947 — no retry waste, no truncation). 50 topic assignments / 8 distinct topics; 50 subtopic assignments / 16 subtopics. One new topic surfaced ("Personal Finance & Economics") — sticky-curation new-topic-badge path exercised. Server log clean: `POST /api/discover` 200 → `GET /api/state?discovery_run_id=8` 200 (88KB). UI snapped to Review with the new run as expected. Modal sat on "Running…" ~17s — acceptable, but confirms stream/poll is the next obvious UX win if it gets annoying. No code change.
+
+### Next
+- Stream/poll in-flight discovery (`/api/state?discovery_run_id=N` polling while run executes in a thread) — modal currently blocks ~17s.
+- Server-side Supply sort (`ORDER BY` toggle in `_build_supply_videos` so `oldest` returns channel's true oldest, not oldest of loaded N).
+
+---
+
 ## 2026-05-10 — Discovery truncation fix (raise max_tokens + skip retry on truncation)
 
 Both halves of yesterday's smoke-test damage report addressed in one commit on `feat/issue-11-discovery-truncation-fix`. **A) Raised `AnthropicRunner.max_tokens` from `4096` → `64000`** (Haiku 4.5's published output ceiling, exposed as `DEFAULT_MAX_TOKENS` and a constructor kwarg so we can dial it down per call/model). Applied in both `run_single` and `run_batch_submission`. **B) `Extractor._run_single_with_retry` now short-circuits on `stop_reason="max_tokens"`** — captures `last_stop_reason` after each `run_single`, and on first `SchemaValidationError` checks it: if the response was truncated, writes the `parse_status="failed"` audit row directly and re-raises without a second LLM call. Non-truncation parse failures still take the existing retry-once path (regression-tested). `AnthropicRunner` exposes `last_stop_reason` (and `last_batch_stop_reasons` for batch entries); `FakeLLMRunner` gained `queue_stop_reason()` + `last_stop_reason` so tests can simulate truncation without monkeypatching. New class `TruncationRetrySkipTests` (3 tests: truncation→no-retry, non-truncation→retry-still-works, missing-stop-reason→retry-still-works) plus `AnthropicRunnerConfigTests` (2 tests: default = 64000, override respected). Verify gate green at **253** (~57s). No real LLM call in tests.
