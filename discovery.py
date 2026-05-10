@@ -602,6 +602,51 @@ def _suppress_wrong_assignments_in_run(
     )
 
 
+def allocate_discovery_run(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    model: str,
+    prompt_version: str,
+) -> int:
+    """Insert a ``discovery_runs`` row in status='running' and return its id.
+
+    Used by the review-UI handler that spawns ``run_discovery`` in a
+    background thread: pre-allocating up-front lets us return the run id to
+    the client before the LLM call starts.
+    """
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        connection.row_factory = sqlite3.Row
+
+        project_row = connection.execute(
+            "SELECT id FROM projects WHERE name = ?", (project_name,)
+        ).fetchone()
+        if project_row is None:
+            raise ValueError(f"project not found: {project_name}")
+        channel_row = connection.execute(
+            """
+            SELECT id FROM channels
+            WHERE project_id = ? AND is_primary = 1
+            ORDER BY id LIMIT 1
+            """,
+            (project_row["id"],),
+        ).fetchone()
+        if channel_row is None:
+            raise ValueError(f"no primary channel for project: {project_name}")
+
+        cursor = connection.cursor()
+        cursor.execute(
+            """
+            INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
+            VALUES (?, ?, ?, 'running')
+            """,
+            (channel_row["id"], model, prompt_version),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
 def run_discovery(
     db_path: str | Path,
     *,
@@ -609,6 +654,7 @@ def run_discovery(
     llm: LLMCallable,
     model: str,
     prompt_version: str,
+    run_id: int | None = None,
 ) -> int:
     with connect(db_path) as connection:
         ensure_schema(connection)
@@ -657,18 +703,22 @@ def run_discovery(
         # as ``correlation_id`` into the LLM call. The Discover history view
         # joins ``llm_calls.cost_estimate_usd`` back to ``discovery_runs.id``
         # via that column, so without pre-allocation discovery rows would have
-        # NULL cost. Optimistically marked 'success' — flipped to 'error' on
-        # either the LLM-call or persistence failure paths below.
-        pre_cursor = connection.cursor()
-        pre_cursor.execute(
-            """
-            INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
-            VALUES (?, ?, ?, 'success')
-            """,
-            (channel_id, model, prompt_version),
-        )
-        run_id = pre_cursor.lastrowid
-        connection.commit()
+        # NULL cost. Inserted with status='running'; flipped to 'success' at
+        # the bottom of the happy path or 'error' on the failure paths below.
+        # If the caller already pre-allocated (e.g. the review-UI handler that
+        # spawns this in a background thread and returns the id immediately),
+        # we skip the INSERT and reuse their id.
+        if run_id is None:
+            pre_cursor = connection.cursor()
+            pre_cursor.execute(
+                """
+                INSERT INTO discovery_runs(channel_id, model, prompt_version, status)
+                VALUES (?, ?, ?, 'running')
+                """,
+                (channel_id, model, prompt_version),
+            )
+            run_id = pre_cursor.lastrowid
+            connection.commit()
 
         try:
             payload = _call_llm_with_optional_correlation(llm, videos, run_id)
@@ -796,6 +846,10 @@ def run_discovery(
 
             _suppress_wrong_assignments_in_run(connection, channel_id, run_id)
 
+            connection.execute(
+                "UPDATE discovery_runs SET status = 'success' WHERE id = ?",
+                (run_id,),
+            )
             connection.commit()
         except Exception as exc:
             # Validation or persistence failed after the LLM returned a

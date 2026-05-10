@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -73,7 +74,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.11-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -3920,6 +3921,32 @@ HTML_PAGE = """<!doctype html>
       modal.removeAttribute('data-open');
     }
 
+    async function pollDiscoveryRunStatus(runId) {
+      // Poll /api/discovery_runs/<id> until status is terminal ('success' or
+      // 'error') or we hit the safety cap. Returns the final status payload
+      // or throws on timeout. Cap at ~120s — a healthy DOAC run is ~17s, but
+      // larger channels could be slower; we'd rather surface a "still running"
+      // hint than auto-cancel.
+      const intervalMs = 1500;
+      const capMs = 120000;
+      const start = Date.now();
+      while (true) {
+        const res = await fetch(`/api/discovery_runs/${runId}`);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `status check failed (HTTP ${res.status})`);
+        }
+        const status = await res.json();
+        if (status.status === 'success' || status.status === 'error') {
+          return status;
+        }
+        if (Date.now() - start > capMs) {
+          throw new Error(`discovery still running after ${capMs / 1000}s — check the server log`);
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+
     async function runDiscoverFromModal() {
       const goBtn = document.getElementById('discover-confirm-go');
       const cancelBtn = document.getElementById('discover-confirm-cancel');
@@ -3930,19 +3957,28 @@ HTML_PAGE = """<!doctype html>
       if (runBtn) { runBtn.disabled = true; runBtn.textContent = 'Running…'; }
       setStatus(`Running ${mode} discovery — this may take a few seconds…`);
       try {
-        const payload = await postJson('/api/discover', { mode });
-        setStatus(payload.message || `Discovery run ${payload.run_id} complete.`);
-        state.activeDiscoveryRunId = payload.run_id;
+        const startResp = await postJson('/api/discover', { mode });
+        const runId = startResp.run_id;
+        setStatus(`Discovery run ${runId} started — polling for completion…`);
+        const finalStatus = await pollDiscoveryRunStatus(runId);
+        if (finalStatus.status === 'error') {
+          throw new Error(finalStatus.error_message || `Discovery run ${runId} errored.`);
+        }
+        setStatus(`Discovery run ${runId} complete.`);
+        state.activeDiscoveryRunId = runId;
         state.activeStage = 'review';
         state.focusedTopic = null;
         state.activeSubtopic = null;
         await fetchState();
+        closeDiscoverConfirm();
       } catch (error) {
         setStatus(error.message || 'Discovery failed.', true);
+        // Leave the modal open on error so the user can read the message
+        // and click Cancel; reset the Run button label so they can retry.
+        if (goBtn) { goBtn.disabled = false; goBtn.textContent = state.discoverMode === 'real' ? 'Run --real' : 'Run --stub'; }
       } finally {
         if (cancelBtn) cancelBtn.disabled = false;
         if (runBtn) { runBtn.disabled = false; runBtn.textContent = 'Run discovery →'; }
-        closeDiscoverConfirm();
       }
     }
 
@@ -5332,50 +5368,74 @@ def build_state_payload(
     }
 
 
-def _default_discover_runner(db_path: Path, *, mode: str) -> dict[str, Any]:
-    """Default runner for ``POST /api/discover``.
+def _discover_mode_config(mode: str) -> tuple[str, str]:
+    """Return ``(model, prompt_version)`` for a ``POST /api/discover`` mode.
 
-    Picks ``stub_llm`` or the real Anthropic-backed callable per ``mode`` and
-    drives ``run_discovery``. The real path opens a sqlite connection that the
-    Extractor uses to log ``llm_calls`` rows; we close it after the run.
-    The ``RALPH_ALLOW_REAL_LLM=1`` gate is enforced inside
-    ``make_real_llm_callable`` and surfaces here as ``RuntimeError``.
+    Hoisted out of the runner so the request handler can pre-allocate the
+    ``discovery_runs`` row (which needs both fields) before spawning the
+    background thread that calls the runner.
     """
     from yt_channel_analyzer.discovery import (
         DISCOVERY_PROMPT_VERSION,
         STUB_MODEL,
         STUB_PROMPT_VERSION,
+    )
+
+    if mode == "stub":
+        return (STUB_MODEL, STUB_PROMPT_VERSION)
+    if mode == "real":
+        from yt_channel_analyzer.extractor.anthropic_runner import DEFAULT_MODEL
+
+        return (DEFAULT_MODEL, DISCOVERY_PROMPT_VERSION)
+    raise ReviewUIError(f"unknown discover mode: {mode!r}")
+
+
+def _default_discover_runner(
+    db_path: Path, *, mode: str, run_id: int
+) -> dict[str, Any]:
+    """Default runner for ``POST /api/discover``.
+
+    Picks ``stub_llm`` or the real Anthropic-backed callable per ``mode`` and
+    drives ``run_discovery`` against a pre-allocated run row. The real path
+    opens a sqlite connection that the Extractor uses to log ``llm_calls``
+    rows; we close it after the run. The ``RALPH_ALLOW_REAL_LLM=1`` gate is
+    enforced inside ``make_real_llm_callable`` and surfaces here as
+    ``RuntimeError`` — caller (request handler) catches and stamps the row.
+    """
+    from yt_channel_analyzer.discovery import (
         run_discovery,
         stub_llm,
     )
 
     project_name = _resolve_primary_project_name(db_path)
+    model, prompt_version = _discover_mode_config(mode)
     if mode == "stub":
-        run_id = run_discovery(
+        run_discovery(
             db_path,
             project_name=project_name,
             llm=stub_llm,
-            model=STUB_MODEL,
-            prompt_version=STUB_PROMPT_VERSION,
+            model=model,
+            prompt_version=prompt_version,
+            run_id=run_id,
         )
-        return {"run_id": run_id, "model": STUB_MODEL, "prompt_version": STUB_PROMPT_VERSION}
+        return {"run_id": run_id, "model": model, "prompt_version": prompt_version}
     if mode == "real":
         from yt_channel_analyzer.discovery import make_real_llm_callable
-        from yt_channel_analyzer.extractor.anthropic_runner import DEFAULT_MODEL
 
         connection = connect(db_path)
         try:
             llm = make_real_llm_callable(connection)
-            run_id = run_discovery(
+            run_discovery(
                 db_path,
                 project_name=project_name,
                 llm=llm,
-                model=DEFAULT_MODEL,
-                prompt_version=DISCOVERY_PROMPT_VERSION,
+                model=model,
+                prompt_version=prompt_version,
+                run_id=run_id,
             )
         finally:
             connection.close()
-        return {"run_id": run_id, "model": DEFAULT_MODEL, "prompt_version": DISCOVERY_PROMPT_VERSION}
+        return {"run_id": run_id, "model": model, "prompt_version": prompt_version}
     raise ReviewUIError(f"unknown discover mode: {mode!r}")
 
 
@@ -5388,12 +5448,18 @@ class ReviewUIApp:
         channel_metadata_fetcher: Any = None,
         channel_videos_fetcher: Any = None,
         discover_runner: Any = None,
+        run_in_background: bool = True,
     ) -> None:
         self.db_path = Path(db_path)
         self.sample_limit = sample_limit
         self._channel_metadata_fetcher = channel_metadata_fetcher or _real_fetch_channel_metadata
         self._channel_videos_fetcher = channel_videos_fetcher or _real_fetch_channel_videos
         self._discover_runner = discover_runner or _default_discover_runner
+        # ``run_in_background=True`` spawns a daemon thread per /api/discover
+        # call so the request returns immediately with the pre-allocated
+        # run id; the JS client polls /api/discovery_runs/<id> until terminal.
+        # Tests pass ``False`` to keep the call synchronous + deterministic.
+        self._run_in_background = run_in_background
 
     def __call__(self, environ: dict[str, Any], start_response: Any) -> list[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -5431,6 +5497,17 @@ class ReviewUIApp:
                     supply_limit=supply_limit,
                 )
                 return self._json_response(start_response, payload)
+            if method == "GET" and path.startswith("/api/discovery_runs/"):
+                tail = path[len("/api/discovery_runs/"):]
+                try:
+                    run_id_int = int(tail)
+                except ValueError as exc:
+                    raise ReviewUIError(
+                        f"invalid discovery_run id: {tail!r}"
+                    ) from exc
+                return self._json_response(
+                    start_response, self._discovery_run_status(run_id_int)
+                )
             if method == "POST" and path.startswith("/api/"):
                 body = self._read_json_body(environ)
                 payload = self._handle_post(path, body)
@@ -5982,21 +6059,89 @@ class ReviewUIApp:
             raise ReviewUIError(
                 f"invalid mode: {mode!r} (must be one of {', '.join(DISCOVER_MODES)})"
             )
-        try:
-            result = self._discover_runner(self.db_path, mode=mode)
-        except RuntimeError as exc:
-            # `make_real_llm_callable` raises RuntimeError when
-            # RALPH_ALLOW_REAL_LLM is unset — keep the message verbatim
-            # since it's already user-friendly.
-            raise ReviewUIError(str(exc)) from exc
-        run_id = int(result["run_id"])
-        model = str(result.get("model", ""))
+
+        # Real-mode env-gate check before allocation, so a missing
+        # RALPH_ALLOW_REAL_LLM doesn't leave a stale 'running' row behind.
+        # The canonical check still runs in `make_real_llm_callable` inside
+        # the runner; this is a UX optimization, not a security boundary.
+        if mode == "real" and os.environ.get("RALPH_ALLOW_REAL_LLM") != "1":
+            raise ReviewUIError(
+                "Real LLM calls are gated behind RALPH_ALLOW_REAL_LLM=1. "
+                "Set it before retrying."
+            )
+
+        from yt_channel_analyzer.discovery import allocate_discovery_run
+
+        model, prompt_version = _discover_mode_config(mode)
+        project_name = _resolve_primary_project_name(self.db_path)
+        run_id = allocate_discovery_run(
+            self.db_path,
+            project_name=project_name,
+            model=model,
+            prompt_version=prompt_version,
+        )
+
+        if self._run_in_background:
+            thread = threading.Thread(
+                target=self._discover_runner_safe,
+                args=(mode, run_id),
+                daemon=True,
+                name=f"discover-run-{run_id}",
+            )
+            thread.start()
+        else:
+            # Synchronous path for tests. Errors still flip the row to 'error'
+            # via run_discovery's failure handlers; surface them as 400 so
+            # tests can assert on them like the prior synchronous behavior.
+            try:
+                self._discover_runner(self.db_path, mode=mode, run_id=run_id)
+            except RuntimeError as exc:
+                raise ReviewUIError(str(exc)) from exc
+
         return {
             "ok": True,
             "run_id": run_id,
             "mode": mode,
             "model": model,
-            "message": f"Discovery run {run_id} complete (mode={mode}, model={model}).",
+            "message": f"Discovery run {run_id} started (mode={mode}, model={model}).",
+        }
+
+    def _discover_runner_safe(self, mode: str, run_id: int) -> None:
+        """Background-thread entrypoint: drives the runner and swallows
+        exceptions. ``run_discovery`` already flips the row to 'error' on
+        any failure, so the polling client sees the terminal state via the
+        DB. We log to stderr for the dev-server log; we don't have a structured
+        logger here.
+        """
+        try:
+            self._discover_runner(self.db_path, mode=mode, run_id=run_id)
+        except Exception as exc:  # pragma: no cover - defensive thread guard
+            import sys
+            print(
+                f"[discover-run-{run_id}] background run failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _discovery_run_status(self, run_id: int) -> dict[str, Any]:
+        with connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                SELECT id, status, error_message, model, prompt_version, created_at
+                FROM discovery_runs WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None:
+            raise ReviewUIError(f"discovery run not found: {run_id}")
+        return {
+            "id": int(row["id"]),
+            "status": row["status"],
+            "error_message": row["error_message"],
+            "model": row["model"],
+            "prompt_version": row["prompt_version"],
+            "created_at": row["created_at"],
         }
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:

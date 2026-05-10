@@ -342,12 +342,12 @@ SCHEMA_STATEMENTS = [
         channel_id INTEGER NOT NULL,
         model TEXT NOT NULL,
         prompt_version TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'success',
+        status TEXT NOT NULL DEFAULT 'running',
         error_message TEXT,
         raw_response TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
-        CHECK (status IN ('success', 'error'))
+        CHECK (status IN ('running', 'success', 'error'))
     );
     """,
     """
@@ -582,7 +582,7 @@ REQUIRED_TABLE_COLUMNS = {
         "channel_id": "INTEGER NOT NULL",
         "model": "TEXT NOT NULL",
         "prompt_version": "TEXT NOT NULL",
-        "status": "TEXT NOT NULL DEFAULT 'success'",
+        "status": "TEXT NOT NULL DEFAULT 'running'",
         "error_message": "TEXT",
         "raw_response": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
@@ -1057,6 +1057,56 @@ def _repair_video_topic_assignment_source_constraint(
             )
 
 
+def _repair_discovery_runs_status_constraint(connection: sqlite3.Connection) -> None:
+    if not _table_exists(connection, "discovery_runs"):
+        return
+
+    create_sql_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'discovery_runs'"
+    ).fetchone()
+    if create_sql_row is None:
+        return
+
+    create_sql = create_sql_row[0] or ""
+    if "'running'" in create_sql:
+        return
+
+    # Rebuild the parent table without breaking child FK references
+    # (topics, video_topics, video_subtopics all reference discovery_runs.id).
+    # legacy_alter_table=ON keeps the RENAME from rewriting child schemas to
+    # point at discovery_runs_old; foreign_keys=OFF keeps the DROP at the end
+    # from firing ON DELETE SET NULL on existing child rows.
+    connection.executescript("PRAGMA foreign_keys = OFF;")
+    connection.executescript("PRAGMA legacy_alter_table = ON;")
+    connection.executescript(
+        """
+        ALTER TABLE discovery_runs RENAME TO discovery_runs_old;
+        CREATE TABLE discovery_runs (
+            id INTEGER PRIMARY KEY,
+            channel_id INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            prompt_version TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            error_message TEXT,
+            raw_response TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+            CHECK (status IN ('running', 'success', 'error'))
+        );
+        INSERT INTO discovery_runs(
+            id, channel_id, model, prompt_version, status,
+            error_message, raw_response, created_at
+        )
+        SELECT id, channel_id, model, prompt_version, status,
+            error_message, raw_response, created_at
+        FROM discovery_runs_old;
+        DROP TABLE discovery_runs_old;
+        """
+    )
+    connection.executescript("PRAGMA legacy_alter_table = OFF;")
+    connection.executescript("PRAGMA foreign_keys = ON;")
+
+
 def ensure_schema(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     for statement in SCHEMA_STATEMENTS:
@@ -1066,6 +1116,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     _repair_video_transcripts_constraint(connection)
     _repair_topic_suggestion_tables(connection)
     _repair_video_topic_assignment_source_constraint(connection)
+    _repair_discovery_runs_status_constraint(connection)
     for statement in INDEX_STATEMENTS:
         cursor.executescript(statement)
 

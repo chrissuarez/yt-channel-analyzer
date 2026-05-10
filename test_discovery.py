@@ -6120,7 +6120,10 @@ class DiscoverEndpointTests(unittest.TestCase):
             db_path = Path(tmpdir) / "test.sqlite3"
             _seed_channel_with_videos(db_path)
 
-            app = ReviewUIApp(db_path)
+            # run_in_background=False keeps the call synchronous so we can
+            # observe the post-run DB state deterministically. Production
+            # default (True) spawns a daemon thread per request.
+            app = ReviewUIApp(db_path, run_in_background=False)
             status, body = self._call_app(
                 app, "POST", "/api/discover", body={"mode": "stub"}
             )
@@ -6129,7 +6132,7 @@ class DiscoverEndpointTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["mode"], "stub")
             self.assertIsInstance(payload["run_id"], int)
-            self.assertIn("Discovery run", payload["message"])
+            self.assertIn("started", payload["message"])
 
             with connect(db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -6165,29 +6168,34 @@ class DiscoverEndpointTests(unittest.TestCase):
 
             recorded: dict[str, object] = {}
 
-            def runner(db_path_arg, *, mode):
+            def runner(db_path_arg, *, mode, run_id):
+                # The handler pre-allocates the discovery_runs row and
+                # passes its id to the runner, so the runner's role is
+                # narrowed to "drive run_discovery against that id".
                 recorded["db_path"] = Path(db_path_arg)
                 recorded["mode"] = mode
-                return {
-                    "run_id": 42,
-                    "model": "claude-haiku-4-5-20251001",
-                    "prompt_version": "v1",
-                }
+                recorded["run_id"] = run_id
+                return {"run_id": run_id, "model": "x", "prompt_version": "v"}
 
             with mock.patch.dict(
                 os.environ, {"RALPH_ALLOW_REAL_LLM": "1"}, clear=True
             ):
-                app = ReviewUIApp(db_path, discover_runner=runner)
+                app = ReviewUIApp(
+                    db_path, discover_runner=runner, run_in_background=False
+                )
                 status, body = self._call_app(
                     app, "POST", "/api/discover", body={"mode": "real"}
                 )
             self.assertEqual(status, "200 OK")
             payload = json.loads(body)
-            self.assertEqual(payload["run_id"], 42)
             self.assertEqual(payload["mode"], "real")
-            self.assertEqual(payload["model"], "claude-haiku-4-5-20251001")
+            self.assertIsInstance(payload["run_id"], int)
+            # The model now comes from `_discover_mode_config(mode)`
+            # (DEFAULT_MODEL for "real"), not from the runner's return value.
+            self.assertTrue(payload["model"])
             self.assertEqual(recorded["mode"], "real")
             self.assertEqual(recorded["db_path"], db_path)
+            self.assertEqual(recorded["run_id"], payload["run_id"])
 
     def test_discover_missing_mode_returns_400(self) -> None:
         from yt_channel_analyzer.review_ui import ReviewUIApp
@@ -6232,6 +6240,150 @@ class DiscoverEndpointTests(unittest.TestCase):
         # Earlier UI_REVISION substrings preserved.
         self.assertIn("reingest", UI_REVISION)
         self.assertIn("discover-cost", UI_REVISION)
+        # New: streaming-poll marker for the async discovery slice.
+        self.assertIn("streaming-poll", UI_REVISION)
+
+    def test_discover_endpoint_pre_allocates_running_row_then_runs(self) -> None:
+        """Sync test of the new async contract: pre-allocate a 'running'
+        row, return its id immediately, then drive the runner against it.
+        With ``run_in_background=False`` the runner finishes before the
+        response — so we observe the row flipped to 'success' and the
+        runner saw the pre-allocated id (not one of its own choosing)."""
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            seen: dict[str, object] = {}
+
+            def runner(db_path_arg, *, mode, run_id):
+                seen["run_id"] = run_id
+                # Read the row state mid-runner: should be 'running' since
+                # run_discovery hasn't finished its UPDATE yet.
+                with connect(db_path_arg) as conn:
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute(
+                        "SELECT status FROM discovery_runs WHERE id = ?",
+                        (run_id,),
+                    ).fetchone()
+                seen["mid_status"] = row["status"] if row else None
+                # Manually finish the run (we're stubbing run_discovery here).
+                with connect(db_path_arg) as conn:
+                    conn.execute(
+                        "UPDATE discovery_runs SET status = 'success' WHERE id = ?",
+                        (run_id,),
+                    )
+                    conn.commit()
+                return {"run_id": run_id, "model": "x", "prompt_version": "v"}
+
+            app = ReviewUIApp(
+                db_path, discover_runner=runner, run_in_background=False
+            )
+            status, body = self._call_app(
+                app, "POST", "/api/discover", body={"mode": "stub"}
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertEqual(seen["mid_status"], "running")
+            self.assertEqual(seen["run_id"], payload["run_id"])
+
+    def test_discovery_run_status_endpoint_returns_row(self) -> None:
+        """`GET /api/discovery_runs/<id>` returns a small status payload —
+        the polling target the JS modal hits every 1.5s while a run is in
+        flight. Bounded shape (no topic-map blob)."""
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            app = ReviewUIApp(db_path, run_in_background=False)
+            # Drive a stub run end-to-end so we have a 'success' row.
+            self._call_app(app, "POST", "/api/discover", body={"mode": "stub"})
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT id FROM discovery_runs ORDER BY id LIMIT 1"
+                ).fetchone()
+            run_id = int(row["id"])
+
+            status, body = self._call_app(
+                app, "GET", f"/api/discovery_runs/{run_id}"
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertEqual(payload["id"], run_id)
+            self.assertEqual(payload["status"], "success")
+            self.assertIsNone(payload["error_message"])
+            self.assertIn("model", payload)
+            self.assertIn("prompt_version", payload)
+
+    def test_discovery_run_status_endpoint_404_for_unknown_id(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = ReviewUIApp(db_path, run_in_background=False)
+            status, body = self._call_app(
+                app, "GET", "/api/discovery_runs/9999"
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", json.loads(body)["error"])
+
+    def test_discovery_runs_status_check_constraint_allows_running(self) -> None:
+        """The schema allows 'running' as a status. A pre-existing DB built
+        against the old CHECK (success|error) gets rebuilt by the migration
+        in ``ensure_schema`` — verified by inserting a 'running' row after
+        ensure_schema runs."""
+        from yt_channel_analyzer.db import ensure_schema as _ensure
+        from yt_channel_analyzer.discovery import allocate_discovery_run
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            # Force the old constraint to simulate a pre-migration DB.
+            with connect(db_path) as conn:
+                conn.executescript("PRAGMA foreign_keys = OFF;")
+                conn.executescript("PRAGMA legacy_alter_table = ON;")
+                conn.executescript(
+                    """
+                    DROP TABLE discovery_runs;
+                    CREATE TABLE discovery_runs (
+                        id INTEGER PRIMARY KEY,
+                        channel_id INTEGER NOT NULL,
+                        model TEXT NOT NULL,
+                        prompt_version TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'success',
+                        error_message TEXT,
+                        raw_response TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+                        CHECK (status IN ('success', 'error'))
+                    );
+                    """
+                )
+                conn.executescript("PRAGMA legacy_alter_table = OFF;")
+                conn.executescript("PRAGMA foreign_keys = ON;")
+                conn.commit()
+            # Re-running ensure_schema rebuilds the table to allow 'running'.
+            with connect(db_path) as conn:
+                _ensure(conn)
+                conn.commit()
+            run_id = allocate_discovery_run(
+                db_path,
+                project_name="proj",
+                model="m",
+                prompt_version="v",
+            )
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT status FROM discovery_runs WHERE id = ?", (run_id,)
+                ).fetchone()
+            self.assertEqual(row["status"], "running")
 
 
 class ChannelEditEndpointTests(unittest.TestCase):
