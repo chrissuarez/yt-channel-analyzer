@@ -6789,5 +6789,185 @@ class SupplyPaginationTests(unittest.TestCase):
         self.assertIn("reingest", UI_REVISION)
 
 
+class Iso8601DurationParsingTests(unittest.TestCase):
+    def test_parses_common_forms(self) -> None:
+        from yt_channel_analyzer.youtube import parse_iso8601_duration
+
+        self.assertEqual(parse_iso8601_duration("PT0S"), 0)
+        self.assertEqual(parse_iso8601_duration("PT45S"), 45)
+        self.assertEqual(parse_iso8601_duration("PT2M30S"), 150)
+        self.assertEqual(parse_iso8601_duration("PT1H2M3S"), 3723)
+        self.assertEqual(parse_iso8601_duration("PT1H"), 3600)
+        self.assertEqual(parse_iso8601_duration("P1DT2H"), 93600)
+
+    def test_missing_or_unparseable_returns_none(self) -> None:
+        from yt_channel_analyzer.youtube import parse_iso8601_duration
+
+        self.assertIsNone(parse_iso8601_duration(None))
+        self.assertIsNone(parse_iso8601_duration(""))
+        self.assertIsNone(parse_iso8601_duration("bogus"))
+        self.assertIsNone(parse_iso8601_duration("2M30S"))  # missing leading P
+
+
+class ShortsStockpileSchemaTests(unittest.TestCase):
+    def test_fresh_schema_has_new_columns(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "fresh.sqlite3"
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                videos_cols = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+                channels_cols = {row[1] for row in conn.execute("PRAGMA table_info(channels)")}
+                runs_cols = {row[1] for row in conn.execute("PRAGMA table_info(discovery_runs)")}
+        self.assertIn("duration_seconds", videos_cols)
+        self.assertIn("exclude_shorts", channels_cols)
+        for col in (
+            "shorts_cutoff_seconds",
+            "n_episodes_total",
+            "n_shorts_excluded",
+            "n_orphaned_wrong_marks",
+            "n_orphaned_renames",
+        ):
+            self.assertIn(col, runs_cols)
+
+    def test_ensure_schema_alters_legacy_tables(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "legacy.sqlite3"
+            with connect(db_path) as conn:
+                # Pre-pivot-shaped tables that predate the new columns.
+                conn.execute(
+                    "CREATE TABLE channels (id INTEGER PRIMARY KEY, project_id INTEGER NOT NULL, "
+                    "youtube_channel_id TEXT NOT NULL, title TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE videos (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, "
+                    "youtube_video_id TEXT NOT NULL, title TEXT NOT NULL)"
+                )
+                conn.execute(
+                    "CREATE TABLE discovery_runs (id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL, "
+                    "model TEXT NOT NULL, prompt_version TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running')"
+                )
+                conn.commit()
+                ensure_schema(conn)
+                videos_cols = {row[1] for row in conn.execute("PRAGMA table_info(videos)")}
+                channels_cols = {row[1] for row in conn.execute("PRAGMA table_info(channels)")}
+                runs_cols = {row[1] for row in conn.execute("PRAGMA table_info(discovery_runs)")}
+        self.assertIn("duration_seconds", videos_cols)
+        self.assertIn("exclude_shorts", channels_cols)
+        self.assertTrue(
+            {"shorts_cutoff_seconds", "n_episodes_total", "n_shorts_excluded",
+             "n_orphaned_wrong_marks", "n_orphaned_renames"}.issubset(runs_cols)
+        )
+
+    def test_exclude_shorts_defaults_to_zero(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "default.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                row = conn.execute("SELECT exclude_shorts FROM channels WHERE is_primary = 1").fetchone()
+            self.assertEqual(row[0], 0)
+
+
+class FetchVideoDurationsTests(unittest.TestCase):
+    def test_fetch_channel_videos_enriches_with_duration(self) -> None:
+        from yt_channel_analyzer import youtube
+
+        def fake_fetch_json(url: str) -> dict:
+            if "/channels?" in url:
+                return {"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UU123"}}}]}
+            if "/playlistItems?" in url:
+                return {
+                    "items": [
+                        {
+                            "snippet": {"title": "Long ep", "description": "d", "publishedAt": "2026-01-01T00:00:00Z", "thumbnails": {}},
+                            "contentDetails": {"videoId": "vidL", "videoPublishedAt": "2026-01-01T00:00:00Z"},
+                        },
+                        {
+                            "snippet": {"title": "Short", "description": "d", "publishedAt": "2026-01-02T00:00:00Z", "thumbnails": {}},
+                            "contentDetails": {"videoId": "vidS", "videoPublishedAt": "2026-01-02T00:00:00Z"},
+                        },
+                    ]
+                }
+            if "/videos?" in url:
+                return {
+                    "items": [
+                        {"id": "vidL", "contentDetails": {"duration": "PT1H5M"}},
+                        {"id": "vidS", "contentDetails": {"duration": "PT45S"}},
+                    ]
+                }
+            raise AssertionError(f"unexpected URL: {url}")
+
+        original = youtube.fetch_json
+        youtube.fetch_json = fake_fetch_json
+        try:
+            videos = youtube.fetch_channel_videos("UC123", api_key="k", limit=25)
+        finally:
+            youtube.fetch_json = original
+        by_id = {v.youtube_video_id: v.duration_seconds for v in videos}
+        self.assertEqual(by_id, {"vidL": 3900, "vidS": 45})
+
+    def test_fetch_video_durations_no_ids_makes_no_call(self) -> None:
+        from yt_channel_analyzer import youtube
+
+        original = youtube.fetch_json
+        youtube.fetch_json = lambda url: (_ for _ in ()).throw(AssertionError("should not be called"))
+        try:
+            self.assertEqual(youtube.fetch_video_durations([]), {})
+        finally:
+            youtube.fetch_json = original
+
+
+class BackfillDurationsCLITests(unittest.TestCase):
+    def test_backfill_durations_is_idempotent(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "backfill.sqlite3"
+            _seed_channel_with_videos(db_path)  # vid1, vid2 with NULL duration
+
+            calls: list[list[str]] = []
+
+            def fake_fetch_video_durations(video_ids, *, api_key=None):
+                calls.append(list(video_ids))
+                return {"vid1": 4200, "vid2": 30}
+
+            original = cli.fetch_video_durations
+            cli.fetch_video_durations = fake_fetch_video_durations
+            try:
+                self.assertEqual(cli.main(["backfill-durations", "--db-path", str(db_path)]), 0)
+                with connect(db_path) as conn:
+                    rows = dict(conn.execute("SELECT youtube_video_id, duration_seconds FROM videos"))
+                self.assertEqual(rows, {"vid1": 4200, "vid2": 30})
+                self.assertEqual(calls, [["vid1", "vid2"]])
+
+                # Second run: nothing missing, fetcher must not be invoked.
+                self.assertEqual(cli.main(["backfill-durations", "--db-path", str(db_path)]), 0)
+                self.assertEqual(calls, [["vid1", "vid2"]])
+                with connect(db_path) as conn:
+                    rows = dict(conn.execute("SELECT youtube_video_id, duration_seconds FROM videos"))
+                self.assertEqual(rows, {"vid1": 4200, "vid2": 30})
+            finally:
+                cli.fetch_video_durations = original
+
+    def test_backfill_durations_only_touches_null_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "partial.sqlite3"
+            _seed_channel_with_videos(db_path)
+            with connect(db_path) as conn:
+                conn.execute("UPDATE videos SET duration_seconds = 999 WHERE youtube_video_id = 'vid1'")
+                conn.commit()
+
+            def fake_fetch_video_durations(video_ids, *, api_key=None):
+                self.assertEqual(list(video_ids), ["vid2"])
+                return {"vid2": 60}
+
+            original = cli.fetch_video_durations
+            cli.fetch_video_durations = fake_fetch_video_durations
+            try:
+                self.assertEqual(cli.main(["backfill-durations", "--db-path", str(db_path)]), 0)
+            finally:
+                cli.fetch_video_durations = original
+            with connect(db_path) as conn:
+                rows = dict(conn.execute("SELECT youtube_video_id, duration_seconds FROM videos"))
+            self.assertEqual(rows, {"vid1": 999, "vid2": 60})
+
+
 if __name__ == "__main__":
     unittest.main()

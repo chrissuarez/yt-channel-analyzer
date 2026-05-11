@@ -2,12 +2,45 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+
+# YouTube returns the max 50 IDs per videos.list request.
+YOUTUBE_VIDEOS_LIST_BATCH = 50
+
+_ISO8601_DURATION_RE = re.compile(
+    r"^P"
+    r"(?:(?P<days>\d+)D)?"
+    r"(?:T"
+    r"(?:(?P<hours>\d+)H)?"
+    r"(?:(?P<minutes>\d+)M)?"
+    r"(?:(?P<seconds>\d+)S)?"
+    r")?$"
+)
+
+
+def parse_iso8601_duration(value: str | None) -> int | None:
+    """Parse an ISO 8601 duration like ``PT2M30S`` into whole seconds.
+
+    Returns ``None`` for a falsy or unparseable value (e.g. live streams that
+    report ``P0D`` parse to ``0``; anything outside the supported grammar yields
+    ``None`` rather than raising)."""
+    if not value:
+        return None
+    match = _ISO8601_DURATION_RE.match(value.strip())
+    if match is None:
+        return None
+    parts = match.groupdict()
+    days = int(parts["days"] or 0)
+    hours = int(parts["hours"] or 0)
+    minutes = int(parts["minutes"] or 0)
+    seconds = int(parts["seconds"] or 0)
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
 
 
 @dataclass(frozen=True)
@@ -33,6 +66,7 @@ class VideoMetadata:
     description: str | None
     published_at: str | None
     thumbnail_url: str | None
+    duration_seconds: int | None = None
 
 
 class YouTubeResolverError(ValueError):
@@ -203,7 +237,58 @@ def fetch_channel_videos(
                 thumbnail_url=thumbnail.get("url"),
             )
         )
-    return videos
+
+    durations = fetch_video_durations(
+        [video.youtube_video_id for video in videos], api_key=key
+    )
+    return [
+        VideoMetadata(
+            youtube_video_id=video.youtube_video_id,
+            title=video.title,
+            description=video.description,
+            published_at=video.published_at,
+            thumbnail_url=video.thumbnail_url,
+            duration_seconds=durations.get(video.youtube_video_id),
+        )
+        for video in videos
+    ]
+
+
+def _batched(values: list[str], size: int) -> list[list[str]]:
+    return [values[i : i + size] for i in range(0, len(values), size)]
+
+
+def fetch_video_durations(
+    video_ids: list[str],
+    *,
+    api_key: str | None = None,
+) -> dict[str, int | None]:
+    """Look up ``contentDetails.duration`` for each video ID via ``videos.list``
+    (batched ≤50 per request) and return ``{video_id: seconds | None}``.
+
+    Missing IDs (deleted/private videos) and durations the API omits map to
+    ``None``. An empty input list makes no API call."""
+    unique_ids = list(dict.fromkeys(vid for vid in video_ids if vid))
+    if not unique_ids:
+        return {}
+    key = api_key or get_api_key()
+    durations: dict[str, int | None] = {vid: None for vid in unique_ids}
+    for batch in _batched(unique_ids, YOUTUBE_VIDEOS_LIST_BATCH):
+        url = build_api_url(
+            "videos",
+            part="contentDetails",
+            id=",".join(batch),
+            maxResults=str(YOUTUBE_VIDEOS_LIST_BATCH),
+            key=key,
+        )
+        payload = fetch_json(url)
+        for item in payload.get("items", []):
+            video_id = item.get("id")
+            if not video_id:
+                continue
+            duration_text = item.get("contentDetails", {}).get("duration")
+            durations[video_id] = parse_iso8601_duration(duration_text)
+    return durations
 
 
 def _safe_exception_detail(exc: Exception) -> str | None:

@@ -35,6 +35,7 @@ SCHEMA_STATEMENTS = [
         thumbnail_url TEXT,
         last_refreshed_at TEXT,
         is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+        exclude_shorts INTEGER NOT NULL DEFAULT 0 CHECK (exclude_shorts IN (0, 1)),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
         UNIQUE(project_id, youtube_channel_id)
@@ -49,6 +50,7 @@ SCHEMA_STATEMENTS = [
         published_at TEXT,
         description TEXT,
         thumbnail_url TEXT,
+        duration_seconds INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
         UNIQUE(channel_id, youtube_video_id)
@@ -345,6 +347,11 @@ SCHEMA_STATEMENTS = [
         status TEXT NOT NULL DEFAULT 'running',
         error_message TEXT,
         raw_response TEXT,
+        shorts_cutoff_seconds INTEGER,
+        n_episodes_total INTEGER,
+        n_shorts_excluded INTEGER,
+        n_orphaned_wrong_marks INTEGER,
+        n_orphaned_renames INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
         CHECK (status IN ('running', 'success', 'error'))
@@ -426,6 +433,7 @@ REQUIRED_TABLE_COLUMNS = {
         "thumbnail_url": "TEXT",
         "last_refreshed_at": "TEXT",
         "is_primary": "INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))",
+        "exclude_shorts": "INTEGER NOT NULL DEFAULT 0 CHECK (exclude_shorts IN (0, 1))",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "videos": {
@@ -436,6 +444,7 @@ REQUIRED_TABLE_COLUMNS = {
         "published_at": "TEXT",
         "description": "TEXT",
         "thumbnail_url": "TEXT",
+        "duration_seconds": "INTEGER",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "topics": {
@@ -585,6 +594,11 @@ REQUIRED_TABLE_COLUMNS = {
         "status": "TEXT NOT NULL DEFAULT 'running'",
         "error_message": "TEXT",
         "raw_response": "TEXT",
+        "shorts_cutoff_seconds": "INTEGER",
+        "n_episodes_total": "INTEGER",
+        "n_shorts_excluded": "INTEGER",
+        "n_orphaned_wrong_marks": "INTEGER",
+        "n_orphaned_renames": "INTEGER",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
 }
@@ -1733,13 +1747,14 @@ def upsert_videos_for_primary_channel(
         for video in videos:
             cursor.execute(
                 """
-                INSERT INTO videos(channel_id, youtube_video_id, title, published_at, description, thumbnail_url)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO videos(channel_id, youtube_video_id, title, published_at, description, thumbnail_url, duration_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(channel_id, youtube_video_id) DO UPDATE SET
                     title = excluded.title,
                     published_at = excluded.published_at,
                     description = excluded.description,
-                    thumbnail_url = excluded.thumbnail_url
+                    thumbnail_url = excluded.thumbnail_url,
+                    duration_seconds = COALESCE(excluded.duration_seconds, videos.duration_seconds)
                 """,
                 (
                     primary_channel.channel_id,
@@ -1748,6 +1763,7 @@ def upsert_videos_for_primary_channel(
                     video.published_at,
                     video.description,
                     video.thumbnail_url,
+                    video.duration_seconds,
                 ),
             )
 
@@ -1760,6 +1776,51 @@ def upsert_videos_for_primary_channel(
         )
         connection.commit()
     return len(videos)
+
+
+def get_video_ids_missing_duration_for_primary_channel(db_path: str | Path) -> list[str]:
+    """YouTube video IDs of the primary channel's rows with NULL duration_seconds."""
+    primary_channel = get_primary_channel(db_path)
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        rows = connection.execute(
+            """
+            SELECT youtube_video_id
+            FROM videos
+            WHERE channel_id = ? AND duration_seconds IS NULL
+            ORDER BY youtube_video_id
+            """,
+            (primary_channel.channel_id,),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+def update_video_durations_for_primary_channel(
+    db_path: str | Path,
+    *,
+    durations_by_video_id: dict[str, int | None],
+) -> int:
+    """Set duration_seconds for the given primary-channel video IDs. Only touches
+    rows still NULL, so re-running is idempotent. Returns rows updated."""
+    primary_channel = get_primary_channel(db_path)
+    updated = 0
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        cursor = connection.cursor()
+        for youtube_video_id, duration_seconds in durations_by_video_id.items():
+            if duration_seconds is None:
+                continue
+            cursor.execute(
+                """
+                UPDATE videos
+                SET duration_seconds = ?
+                WHERE channel_id = ? AND youtube_video_id = ? AND duration_seconds IS NULL
+                """,
+                (duration_seconds, primary_channel.channel_id, youtube_video_id),
+            )
+            updated += cursor.rowcount
+        connection.commit()
+    return updated
 
 
 def create_topic(

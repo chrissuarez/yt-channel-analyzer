@@ -32,9 +32,11 @@ from yt_channel_analyzer.db import (
     get_primary_channel,
     get_project_overview,
     get_stored_channels,
+    get_video_ids_missing_duration_for_primary_channel,
     get_video_subtopic_assignments,
     get_video_summary,
     get_video_topic_assignments,
+    update_video_durations_for_primary_channel,
     init_db,
     list_comparison_groups,
     list_group_videos,
@@ -109,6 +111,7 @@ from yt_channel_analyzer.youtube import (
     TranscriptRecord,
     fetch_channel_metadata,
     fetch_channel_videos,
+    fetch_video_durations,
     fetch_video_transcript,
     resolve_canonical_channel_id,
 )
@@ -170,6 +173,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=25,
         help="Conservative maximum number of uploaded videos to fetch from the primary channel.",
     )
+
+    backfill_durations_parser = subparsers.add_parser(
+        "backfill-durations",
+        help="Look up duration_seconds for the primary channel's stored videos that are still missing it (requires YOUTUBE_API_KEY). Idempotent.",
+    )
+    backfill_durations_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
 
     subparsers.add_parser(
         "show-channels",
@@ -917,6 +926,25 @@ def main(argv: list[str] | None = None) -> int:
         stored_count = upsert_videos_for_primary_channel(Path(args.db_path), videos=videos)
         print(
             f"Stored {stored_count} video metadata rows for {primary_channel.youtube_channel_id} ({primary_channel.title})"
+        )
+        return 0
+
+    if args.command == "backfill-durations":
+        db_path = Path(args.db_path)
+        primary_channel = get_primary_channel(db_path)
+        missing_ids = get_video_ids_missing_duration_for_primary_channel(db_path)
+        if not missing_ids:
+            print(f"No videos missing duration_seconds for {primary_channel.youtube_channel_id} ({primary_channel.title})")
+            return 0
+        durations = fetch_video_durations(missing_ids)
+        updated = update_video_durations_for_primary_channel(
+            db_path, durations_by_video_id=durations
+        )
+        still_missing = len(missing_ids) - updated
+        print(
+            f"Backfilled duration_seconds for {updated}/{len(missing_ids)} videos of "
+            f"{primary_channel.youtube_channel_id} ({primary_channel.title})"
+            + (f"; {still_missing} still missing (no duration returned)" if still_missing else "")
         )
         return 0
 
