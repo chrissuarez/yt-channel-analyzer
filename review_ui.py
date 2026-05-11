@@ -74,7 +74,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -3143,6 +3143,8 @@ HTML_PAGE = """<!doctype html>
       const publishedHtml = episode.published_at
         ? `<span>${escapeHtml(formatDate(episode.published_at))}</span>`
         : '';
+      const durationStr = formatDuration(episode.duration_seconds);
+      const durationHtml = durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -3151,6 +3153,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">conf ${escapeHtml(pct)}</span>
               ${publishedHtml}
+              ${durationHtml}
               <span>${escapeHtml(episode.youtube_video_id || '')}</span>
               ${alsoInHtml}
             </div>
@@ -3223,6 +3226,8 @@ HTML_PAGE = """<!doctype html>
       const publishedHtml = episode.published_at
         ? `<span class="muted">${escapeHtml(formatDate(episode.published_at))}</span>`
         : '';
+      const durationStr = formatDuration(episode.duration_seconds);
+      const durationHtml = durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -3231,6 +3236,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">${escapeHtml(pct)}</span>
               ${publishedHtml}
+              ${durationHtml}
               <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
               ${alsoInHtml}
             </div>
@@ -3654,6 +3660,17 @@ HTML_PAGE = """<!doctype html>
       return String(value).replace('T', ' ').slice(0, 16);
     }
 
+    function formatDuration(seconds) {
+      const n = Number(seconds);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      const s = Math.round(n);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      const pad = (x) => String(x).padStart(2, '0');
+      return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
+    }
+
     function channelInitial(title) {
       const t = String(title || '').trim();
       if (!t) return '·';
@@ -3831,8 +3848,10 @@ HTML_PAGE = """<!doctype html>
         const thumb = v.thumbnail_url
           ? `style="background-image:url('${escapeHtml(v.thumbnail_url)}');"`
           : '';
+        const durationStr = formatDuration(v.duration_seconds);
         const meta = [
           formatDate(v.published_at),
+          ...(durationStr ? [durationStr] : []),
           'YT-' + escapeHtml(v.youtube_video_id || ''),
         ];
         const metaHtml = meta.map((m, i) =>
@@ -4884,7 +4903,7 @@ def _build_supply_videos(
         rows = connection.execute(
             """
             SELECT v.id, v.youtube_video_id, v.title, v.published_at,
-                   v.thumbnail_url, t.transcript_status, t.fetched_at
+                   v.thumbnail_url, v.duration_seconds, t.transcript_status, t.fetched_at
             FROM videos v
             LEFT JOIN video_transcripts t ON t.video_id = v.id
             WHERE v.channel_id = ?
@@ -4900,6 +4919,11 @@ def _build_supply_videos(
             "title": row["title"],
             "published_at": row["published_at"],
             "thumbnail_url": row["thumbnail_url"],
+            "duration_seconds": (
+                int(row["duration_seconds"])
+                if row["duration_seconds"] is not None
+                else None
+            ),
             "transcript_status": row["transcript_status"],
             "transcript_fetched_at": row["fetched_at"],
         }
@@ -5039,6 +5063,7 @@ def _build_discovery_topic_map(
                    videos.title AS title,
                    videos.thumbnail_url AS thumbnail_url,
                    videos.published_at AS published_at,
+                   videos.duration_seconds AS duration_seconds,
                    video_topics.confidence AS confidence,
                    video_topics.reason AS reason
             FROM video_topics
@@ -5090,6 +5115,11 @@ def _build_discovery_topic_map(
                 "title": row["title"],
                 "thumbnail_url": row["thumbnail_url"],
                 "published_at": row["published_at"],
+                "duration_seconds": (
+                    int(row["duration_seconds"])
+                    if row["duration_seconds"] is not None
+                    else None
+                ),
                 "confidence": (
                     float(row["confidence"]) if row["confidence"] is not None else None
                 ),
