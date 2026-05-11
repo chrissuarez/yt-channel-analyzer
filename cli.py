@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from collections import Counter
 from pathlib import Path
 
 _LEGACY_WARNING = (
@@ -40,6 +42,7 @@ from yt_channel_analyzer.db import (
     init_db,
     list_comparison_groups,
     list_group_videos,
+    list_primary_channel_transcript_status,
     list_subtopics,
     list_topics,
     record_markdown_export,
@@ -108,12 +111,14 @@ from yt_channel_analyzer.review_ui import serve_review_ui
 from yt_channel_analyzer.subtopic_suggestions import suggest_subtopics_for_video
 from yt_channel_analyzer.topic_suggestions import suggest_topics_for_video
 from yt_channel_analyzer.youtube import (
+    RETRYABLE_TRANSCRIPT_STATUSES,
     TranscriptRecord,
     fetch_channel_metadata,
     fetch_channel_videos,
     fetch_video_durations,
     fetch_video_transcript,
     resolve_canonical_channel_id,
+    stub_transcript_fetcher,
 )
 
 
@@ -135,6 +140,85 @@ def _resolve_discovery_llm(db_path: Path, args: argparse.Namespace):
         llm = make_real_llm_callable(connection, model=args.model)
         return llm, args.model or DEFAULT_MODEL, DISCOVERY_PROMPT_VERSION
     return stub_llm, STUB_MODEL, STUB_PROMPT_VERSION
+
+
+def _resolve_fetch_transcript_video_ids(db_path: Path, args: argparse.Namespace) -> list[str]:
+    """Turn the (already mutex-validated) selector flags into the ordered list of
+    YouTube video IDs to fetch. Raises ValueError with an operator-readable message
+    on a bad selection (unknown ID, non-positive --limit, empty --video-ids, or the
+    not-yet-available --refinement-run-id)."""
+    rows = list_primary_channel_transcript_status(db_path)  # newest first
+    status_by_id = {row["youtube_video_id"]: row["transcript_status"] for row in rows}
+
+    if args.video_ids is not None:
+        requested = [vid.strip() for vid in args.video_ids.split(",") if vid.strip()]
+        if not requested:
+            raise ValueError("--video-ids was empty")
+        unknown = [vid for vid in requested if vid not in status_by_id]
+        if unknown:
+            raise ValueError(
+                "not videos of the primary channel: " + ", ".join(unknown)
+            )
+        # Preserve the caller's order, dropping duplicates.
+        seen: set[str] = set()
+        return [vid for vid in requested if not (vid in seen or seen.add(vid))]
+
+    if args.refinement_run_id is not None:
+        raise ValueError(
+            "--refinement-run-id needs the Phase B refinement schema, which is not in this build yet"
+        )
+
+    # --missing-only / --limit: primary-channel videos with no transcript or a retryable one, newest first.
+    missing = [
+        row["youtube_video_id"]
+        for row in rows
+        if row["transcript_status"] is None
+        or row["transcript_status"] in RETRYABLE_TRANSCRIPT_STATUSES
+    ]
+    if args.limit is not None:
+        if args.limit <= 0:
+            raise ValueError("--limit must be a positive integer")
+        return missing[: args.limit]
+    return missing
+
+
+def run_fetch_transcripts(
+    db_path: Path,
+    video_ids: list[str],
+    *,
+    transcript_fetcher=None,
+    sleep=time.sleep,
+    request_interval: float = 1.0,
+    max_rate_limit_retries: int = 5,
+    base_backoff: float = 2.0,
+    max_backoff: float = 60.0,
+    out=print,
+) -> Counter:
+    """Fetch + persist transcripts for ``video_ids`` sequentially. Each result is
+    written immediately via ``upsert_video_transcript`` so a killed run resumes
+    cleanly with ``--missing-only``. A small fixed sleep separates requests (the
+    youtube-transcript-api path is IP-throttled); a ``rate_limited`` result
+    triggers exponential-capped backoff and a retry of the same video, up to
+    ``max_rate_limit_retries`` times before the ``rate_limited`` row is recorded
+    and the run moves on. ``transcript_fetcher`` is the injectable
+    ``Callable[[str], TranscriptRecord]`` (None → the real fetcher). Returns a
+    Counter of final per-video statuses."""
+    tally: Counter = Counter()
+    for index, video_id in enumerate(video_ids):
+        if index > 0:
+            sleep(request_interval)
+        attempt = 0
+        while True:
+            record = fetch_video_transcript(video_id, transcript_fetcher=transcript_fetcher)
+            if record.status == "rate_limited" and attempt < max_rate_limit_retries:
+                sleep(min(base_backoff * (2 ** attempt), max_backoff))
+                attempt += 1
+                continue
+            break
+        upsert_video_transcript(db_path, youtube_video_id=video_id, transcript=record)
+        tally[record.status] += 1
+        out(f"{video_id} | {record.status} | {record.source or ''} | {record.language_code or ''}")
+    return tally
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -179,6 +263,41 @@ def build_parser() -> argparse.ArgumentParser:
         help="Look up duration_seconds for the primary channel's stored videos that are still missing it (requires YOUTUBE_API_KEY). Idempotent.",
     )
     backfill_durations_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
+
+    fetch_transcripts_parser_new = subparsers.add_parser(
+        "fetch-transcripts",
+        help=(
+            "Fetch transcripts for the primary channel's videos (by ID, all still missing, "
+            "or the N most-recent missing). Resumable via --missing-only; never re-fetches an "
+            "'available' row; small inter-request sleep + backoff on rate limits."
+        ),
+    )
+    fetch_transcripts_parser_new.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
+    fetch_transcripts_selector = fetch_transcripts_parser_new.add_mutually_exclusive_group(required=True)
+    fetch_transcripts_selector.add_argument(
+        "--video-ids",
+        help="Comma-separated YouTube video IDs to fetch (each must belong to the primary channel).",
+    )
+    fetch_transcripts_selector.add_argument(
+        "--missing-only",
+        action="store_true",
+        help="Fetch every primary-channel video with no transcript yet, or one whose status is retryable.",
+    )
+    fetch_transcripts_selector.add_argument(
+        "--limit",
+        type=int,
+        help="Fetch the N most-recent primary-channel videos still missing a transcript.",
+    )
+    fetch_transcripts_selector.add_argument(
+        "--refinement-run-id",
+        type=int,
+        help="Fetch exactly the episodes recorded for that refinement run (Phase B; needs the refinement schema).",
+    )
+    fetch_transcripts_parser_new.add_argument(
+        "--stub",
+        action="store_true",
+        help="Use a built-in fake fetcher (no network); writes 'available' rows with placeholder text.",
+    )
 
     subparsers.add_parser(
         "show-channels",
@@ -957,6 +1076,21 @@ def main(argv: list[str] | None = None) -> int:
             f"{primary_channel.youtube_channel_id} ({primary_channel.title})"
             + (f"; {still_missing} still missing (no duration returned)" if still_missing else "")
         )
+        return 0
+
+    if args.command == "fetch-transcripts":
+        db_path = Path(args.db_path)
+        try:
+            video_ids = _resolve_fetch_transcript_video_ids(db_path, args)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if not video_ids:
+            print("Nothing to fetch — every selected video already has a transcript.")
+            return 0
+        fetcher = stub_transcript_fetcher if args.stub else None
+        tally = run_fetch_transcripts(db_path, video_ids, transcript_fetcher=fetcher)
+        print(", ".join(f"{status}: {count}" for status, count in sorted(tally.items())))
         return 0
 
     if args.command == "show-channels":

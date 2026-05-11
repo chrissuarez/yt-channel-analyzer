@@ -27,6 +27,26 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-11 — Phase B slice 1: `fetch-transcripts` CLI (non-legacy fetch path)
+
+### Done
+- `feat/issue-01-fetch-transcripts`, one iteration. Merged `docs/phase-b-prd` → `main` first (FF; deleted branch).
+- New CLI `fetch-transcripts --db-path X (--video-ids a,b,c | --missing-only | --limit N | --refinement-run-id R) [--stub]` in `cli.py`. Selector mutex via argparse `add_mutually_exclusive_group(required=True)` — none/multiple → exit 2. `--missing-only` = primary-channel videos with no `video_transcripts` row or a retryable status (`rate_limited`/`request_failed`/`error`); `--limit N` = the N most-recent of that set; `--video-ids` = exactly those (validated as primary-channel IDs, dedup-preserving-order); `--refinement-run-id` errors cleanly until Phase B schema lands (slice 2/3). Bad selection → `error: …` on stderr, exit 2.
+- Fetch loop helper `run_fetch_transcripts(db_path, video_ids, *, transcript_fetcher=None, sleep=time.sleep, request_interval=1.0, max_rate_limit_retries=5, base_backoff=2.0, max_backoff=60.0, out=print)`: sequential, fixed inter-request sleep, exp-capped backoff + retry-same-video on `rate_limited` (records the `rate_limited` row & moves on after the cap), each result persisted immediately via `upsert_video_transcript` (→ killed run resumes via `--missing-only`), one line/video + closing status tally. Uses the existing `youtube.fetch_video_transcript(transcript_fetcher=…)` injection point.
+- `youtube.py`: `RETRYABLE_TRANSCRIPT_STATUSES` constant + `stub_transcript_fetcher(video_id)` (returns `available`/`generated`/`en`/`<stub transcript for …>`, no network) — surfaced by `--stub`, reused by tests.
+- `db.py`: `list_primary_channel_transcript_status(db_path)` — every primary-channel video LEFT JOIN its transcript status (NULL if unfetched), newest-published first; backs all the selectors.
+- Legacy `fetch-group-transcripts` byte-unchanged. No schema change — `video_transcripts` already had the right columns/status vocab.
+- New `test_transcripts_fetch.py` (17 tests) → added to `.ralph/verify.sh` `DEFAULT_TARGETS`. `test_transcripts.py` untouched & still excluded. Cheatsheet §2 entry added. Verify gate **312 tests green**.
+
+### Learned
+- An injected `transcript_fetcher` returns a `TranscriptRecord` directly (only the *default* fetcher catches exceptions internally), so the rate-limit test fakes a `rate_limited` record then `available`, not a raised exception. The backoff loop keys off `record.status == "rate_limited"`.
+
+### Next
+- Slice 2: refinement schema (`refinement_runs` / `refinement_episodes` / `taxonomy_proposals`, `assignment_source='refine'` + `refinement_run_id` on junction tables) + db helpers. Then slice 3 wires `--refinement-run-id` to real episode lists.
+- Operator: nothing required for this slice (no real LLM/network in scope); real transcript fetch smoke deferred to `.scratch/phase-b-refinement/SMOKE.md` once slices 2–3 land.
+
+---
+
 ## 2026-05-11 — Shorts filter slice C: default flipped to exclude_shorts=1
 
 ### Done

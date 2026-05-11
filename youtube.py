@@ -86,6 +86,23 @@ class TranscriptRecord:
     detail: str | None = None
 
 
+# Transcript-fetch statuses that are worth retrying (transient/network/rate-limit),
+# as opposed to terminal ones ("available", "disabled", "not_found", "unavailable").
+RETRYABLE_TRANSCRIPT_STATUSES = frozenset({"rate_limited", "request_failed", "error"})
+
+
+def stub_transcript_fetcher(video_id: str) -> TranscriptRecord:
+    """A free, deterministic fake transcript fetcher: returns an ``available``
+    record with placeholder text for any ID, no network call. Surfaced by
+    ``fetch-transcripts --stub`` and used by tests as an injectable fetcher."""
+    return TranscriptRecord(
+        status="available",
+        source="generated",
+        language_code="en",
+        text=f"<stub transcript for {video_id}>",
+    )
+
+
 def get_api_key() -> str:
     api_key = os.environ.get("YOUTUBE_API_KEY")
     if not api_key:

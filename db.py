@@ -1861,6 +1861,29 @@ def get_video_ids_missing_duration_for_primary_channel(db_path: str | Path) -> l
     return [row[0] for row in rows]
 
 
+def list_primary_channel_transcript_status(db_path: str | Path) -> list[sqlite3.Row]:
+    """Every primary-channel video paired with its current transcript status
+    (``transcript_status`` is NULL when the video has no ``video_transcripts``
+    row yet), newest first. Backs the ``fetch-transcripts`` selectors."""
+    primary_channel = get_primary_channel(db_path)
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        connection.row_factory = sqlite3.Row
+        return connection.execute(
+            """
+            SELECT videos.youtube_video_id,
+                   videos.title,
+                   videos.published_at,
+                   video_transcripts.transcript_status
+            FROM videos
+            LEFT JOIN video_transcripts ON video_transcripts.video_id = videos.id
+            WHERE videos.channel_id = ?
+            ORDER BY videos.published_at DESC, videos.id DESC
+            """,
+            (primary_channel.channel_id,),
+        ).fetchall()
+
+
 def update_video_durations_for_primary_channel(
     db_path: str | Path,
     *,

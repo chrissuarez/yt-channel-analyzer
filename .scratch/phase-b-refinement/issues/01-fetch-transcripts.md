@@ -1,6 +1,6 @@
 # 01 — `fetch-transcripts` CLI + non-legacy transcript fetch path
 
-Status: needs-triage
+Status: done (2026-05-11 — see WORKLOG / ROADMAP §B1)
 Type: AFK
 Branch: `feat/issue-01-fetch-transcripts`
 Spec: `PRD_PHASE_B.md` (module 2 — "Transcript fetch"; the six slices §B1); `ROADMAP.md` §B
@@ -30,13 +30,14 @@ This is the first vertical slice of Phase B: CLI → `youtube` fetch → DB → 
 
 ## Acceptance criteria
 
-- [ ] `fetch-transcripts --db-path X --missing-only` fetches and persists transcripts for exactly the primary-channel videos missing one (or with a retryable status), prints per-video status + a tally, and is safely re-runnable (already-`available` rows untouched).
-- [ ] `--video-ids` and `--limit` selectors work; supplying none, or more than one, errors clearly.
-- [ ] A killed run resumed with `--missing-only` picks up where it left off (no duplicate work, no lost rows).
-- [ ] A `rate_limited` result triggers backoff-and-continue, not a crash.
-- [ ] `--stub` populates `available` rows with placeholder text and makes no network call; the underlying helper accepts an injectable fetcher used by the tests.
-- [ ] `fetch-group-transcripts` is byte-unchanged.
-- [ ] No schema change. `test_transcripts_fetch.py` is in the verify gate and green; `test_transcripts.py` is untouched and still excluded.
+- [x] `fetch-transcripts --db-path X --missing-only` fetches and persists transcripts for exactly the primary-channel videos missing one (or with a retryable status), prints per-video status + a tally, and is safely re-runnable (already-`available` rows untouched).
+- [x] `--video-ids` and `--limit` selectors work; supplying none, or more than one, errors clearly (argparse mutex → exit 2).
+- [x] A killed run resumed with `--missing-only` picks up where it left off (no duplicate work, no lost rows) — each result `upsert`ed immediately.
+- [x] A `rate_limited` result triggers backoff-and-continue, not a crash (exp-capped backoff, retry same video up to `max_rate_limit_retries`, then record `rate_limited` and move on).
+- [x] `--stub` populates `available` rows with placeholder text and makes no network call; `run_fetch_transcripts` accepts an injectable `transcript_fetcher` used by the tests.
+- [x] `fetch-group-transcripts` is byte-unchanged.
+- [x] No schema change. `test_transcripts_fetch.py` (17 tests) is in the verify gate and green (312 total); `test_transcripts.py` is untouched and still excluded.
+- [n/a] `--refinement-run-id` — wired as a flag, errors cleanly until B2/B3 land the `refinement_runs` table (kept out of B1's acceptance per the spec).
 
 ## Blocked by
 

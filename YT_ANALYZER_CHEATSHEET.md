@@ -116,6 +116,26 @@ python3 -m yt_channel_analyzer.cli fetch-videos \
   --limit 20
 ```
 
+### Fetch transcripts (Phase B sample / Phase C channel-wide)
+
+Non-legacy general fetcher (the older `fetch-group-transcripts` is comparison-group scoped and deprecated — don't use it for new work). Pick exactly one selector. Idempotent: an already-`available` row is never re-fetched, so `--missing-only` is safely resumable after an interruption. `--stub` writes placeholder `available` rows with no network call.
+
+```bash
+# every primary-channel video still missing a transcript (or with a retryable status)
+python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite --missing-only
+
+# just the N most-recent missing ones
+python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite --limit 15
+
+# specific videos by YouTube ID (must belong to the primary channel)
+python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite --video-ids abc123,def456
+
+# wiring sanity check — no network, deterministic
+python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite --missing-only --stub
+```
+
+Prints one line per video (`<id> | <status> | <source> | <language>`) and a closing tally. `--refinement-run-id R` is reserved for Phase B and errors until the refinement schema lands.
+
 ### Inspect import
 
 ```bash
