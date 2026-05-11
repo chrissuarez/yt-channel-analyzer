@@ -2,7 +2,7 @@
 
 **Branch `feat/issue-03-shorts-flip-default-ui` is NOT merged yet** — this slice rewrites the `channels` table (a destructive migration) and changes behavior for *every* channel, so it stays on its branch until you've reviewed the migration and run this smoke. After it passes, Claude fast-forwards it into `main` and the shorts-filter feature is done.
 
-Code is in place; offline gate is green (295 tests). What's left is operator-only: (1) eyeball the `channels` rebuild migration, (2) confirm it runs correctly on a real pre-slice-C DB and is idempotent, (3) a real-LLM `discover` run (~$0.02) to see the badge + orphan counts on live data.
+Code is in place; offline gate is green (295 tests). What's left is operator-only: (1) eyeball the `channels` rebuild migration, (2) confirm it runs correctly on a real pre-slice-C DB and is idempotent, (3) a real-LLM `discover` run (~$0.02) to see the badge + orphan counts on live data, (4) eyeball that per-episode video length now renders in the review UI (the follow-up fix — operators verifying the shorts cutoff need to see lengths).
 
 Every fenced block is self-contained — copy whole. (Reminder: CLI only resolves from `~/.openclaw/workspace` with `PYTHONPATH=.`.)
 
@@ -95,7 +95,22 @@ Open <http://127.0.0.1:8765> → the discovery topic-map header should show a li
 
 ---
 
-## When 1–3 pass
+## 4. Video length renders in the review UI (follow-up fix)
+
+Slice C added the audit-count badge but the per-episode duration was never in any payload, so operators couldn't eyeball the 180s shorts cutoff. Commit `a4c68d9` adds `duration_seconds` to the discovery-episode and supply-videos payloads, a `formatDuration()` helper, and renders the length next to the published date in both discovery episode renderers and the Supply list.
+
+With the server from step 3 still running (or restart it), open <http://127.0.0.1:8765> and **hard-refresh** (the JS is inlined in the page, so a normal reload may serve stale script — `Ctrl-Shift-R`):
+
+- **Discovery topic map** → open a topic lane → each episode row's meta line should read like `42% · 2024-03-11 · 1:23:45 · YT-xxxx` — the `h:mm:ss` (or `m:ss` for sub-hour) length sits between the published date and the video id. Subtopic view rows show the same.
+- **Supply tab** → each video row's meta line should read like `2024-03-11 · 0:48 · YT-xxxx` — short videos (under the 180s cutoff) show a small `m:ss` you can sanity-check against what the filter excluded.
+
+Backfill note: `duration_seconds` is only populated for videos ingested/backfilled after slice A; on a fresh `/tmp/shortsC.sqlite` it'll be filled (the `analyze`/`discover` path backfills — you saw "Backfilled duration_seconds for N/N videos" in step 3). If a row genuinely has no duration the span is omitted (no `—`, no `0:00`), which is expected, not a bug.
+
+**Pass if:** lengths show on episode rows and supply rows, formatted `m:ss` / `h:mm:ss`, and the values look plausible (shorts < 3:00, long-form episodes tens of minutes to a couple hours). (`Ctrl-C` the server when done.)
+
+---
+
+## When 1–4 pass
 
 Tell Claude "slice C smoke passed" — it'll fast-forward `feat/issue-03-shorts-flip-default-ui` into `main`, delete the branch + stale overlay, and the shorts-filter feature is complete (3/3 slices). It'll also add the closing WORKLOG note about the default flip.
 
