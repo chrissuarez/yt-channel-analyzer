@@ -6969,5 +6969,231 @@ class BackfillDurationsCLITests(unittest.TestCase):
             self.assertEqual(rows, {"vid1": 999, "vid2": 60})
 
 
+class ShortsFilterDiscoveryTests(unittest.TestCase):
+    """Slice B — `run_discovery` shorts filter + per-run override + audit fields."""
+
+    def _seed(self, db_path: Path, *, durations, exclude_shorts: int = 0) -> None:
+        init_db(
+            db_path,
+            project_name="proj",
+            channel_id="UC123",
+            channel_title="Channel",
+            channel_handle="@channel",
+        )
+        upsert_videos_for_primary_channel(
+            db_path,
+            videos=[
+                VideoMetadata(
+                    youtube_video_id=f"vid{i}",
+                    title=f"Episode {i}",
+                    description="desc",
+                    published_at=f"2026-04-0{i}T12:00:00Z",
+                    thumbnail_url=None,
+                    duration_seconds=dur,
+                )
+                for i, dur in enumerate(durations, start=1)
+            ],
+        )
+        if exclude_shorts:
+            with connect(db_path) as conn:
+                conn.execute("UPDATE channels SET exclude_shorts = 1")
+                conn.commit()
+
+    @staticmethod
+    def _recording_stub():
+        seen: list[list[str]] = []
+
+        def llm(videos, *, correlation_id=None):
+            seen.append([v.youtube_video_id for v in videos])
+            return stub_llm(videos, correlation_id=correlation_id)
+
+        return llm, seen
+
+    def _topic_map_video_ids(self, db_path: Path, run_id: int) -> set[str]:
+        with connect(db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT v.youtube_video_id
+                FROM video_topics vt JOIN videos v ON v.id = vt.video_id
+                WHERE vt.discovery_run_id = ?
+                """,
+                (run_id,),
+            ).fetchall()
+        return {r[0] for r in rows}
+
+    def _run_audit(self, db_path: Path, run_id: int) -> sqlite3.Row:
+        with connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                """
+                SELECT shorts_cutoff_seconds, n_episodes_total, n_shorts_excluded
+                FROM discovery_runs WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+
+    def test_channel_exclude_shorts_filters_audit_and_skips_llm(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            # 181 kept (> 180); 180 and 60 excluded (<= 180).
+            self._seed(db_path, durations=[181, 180, 60], exclude_shorts=1)
+            llm, seen = self._recording_stub()
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            self.assertEqual(self._topic_map_video_ids(db_path, run_id), {"vid1"})
+            # Filter is upstream of the LLM: the prompt for an excluded video
+            # is never built.
+            self.assertEqual(seen, [["vid1"]])
+            audit = self._run_audit(db_path, run_id)
+            self.assertEqual(audit["shorts_cutoff_seconds"], 180)
+            self.assertEqual(audit["n_episodes_total"], 3)
+            self.assertEqual(audit["n_shorts_excluded"], 2)
+
+    def test_channel_include_default_keeps_everything(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[300, 60, 600], exclude_shorts=0)
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            self.assertEqual(
+                self._topic_map_video_ids(db_path, run_id), {"vid1", "vid2", "vid3"}
+            )
+            audit = self._run_audit(db_path, run_id)
+            self.assertIsNone(audit["shorts_cutoff_seconds"])
+            self.assertEqual(audit["n_episodes_total"], 3)
+            self.assertEqual(audit["n_shorts_excluded"], 0)
+
+    def test_include_shorts_override_beats_channel_exclude(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[300, 60], exclude_shorts=1)
+            self.assertEqual(
+                cli.main(
+                    [
+                        "discover",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "proj",
+                        "--stub",
+                        "--include-shorts",
+                    ]
+                ),
+                0,
+            )
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                run_id = conn.execute("SELECT id FROM discovery_runs").fetchone()["id"]
+                # Override does not mutate the channel's sticky setting.
+                self.assertEqual(
+                    conn.execute("SELECT exclude_shorts FROM channels").fetchone()[0],
+                    1,
+                )
+            self.assertEqual(
+                self._topic_map_video_ids(db_path, run_id), {"vid1", "vid2"}
+            )
+            audit = self._run_audit(db_path, run_id)
+            self.assertIsNone(audit["shorts_cutoff_seconds"])
+            self.assertEqual(audit["n_shorts_excluded"], 0)
+
+    def test_exclude_shorts_override_beats_channel_include(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[300, 60], exclude_shorts=0)
+            self.assertEqual(
+                cli.main(
+                    [
+                        "discover",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "proj",
+                        "--stub",
+                        "--exclude-shorts",
+                    ]
+                ),
+                0,
+            )
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                run_id = conn.execute("SELECT id FROM discovery_runs").fetchone()["id"]
+                self.assertEqual(
+                    conn.execute("SELECT exclude_shorts FROM channels").fetchone()[0],
+                    0,
+                )
+            self.assertEqual(self._topic_map_video_ids(db_path, run_id), {"vid1"})
+            audit = self._run_audit(db_path, run_id)
+            self.assertEqual(audit["shorts_cutoff_seconds"], 180)
+            self.assertEqual(audit["n_episodes_total"], 2)
+            self.assertEqual(audit["n_shorts_excluded"], 1)
+
+    def test_shorts_flags_are_mutually_exclusive(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[300], exclude_shorts=0)
+            with self.assertRaises(SystemExit):
+                cli.main(
+                    [
+                        "discover",
+                        "--db-path",
+                        str(db_path),
+                        "--project-name",
+                        "proj",
+                        "--stub",
+                        "--exclude-shorts",
+                        "--include-shorts",
+                    ]
+                )
+
+    def test_all_shorts_channel_raises_clear_error_and_persists_no_run(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[60, 30], exclude_shorts=1)
+            with self.assertRaises(ValueError) as ctx:
+                run_discovery(
+                    db_path,
+                    project_name="proj",
+                    llm=stub_llm,
+                    model="stub",
+                    prompt_version="stub-v0",
+                )
+            self.assertIn("--include-shorts", str(ctx.exception))
+            with connect(db_path) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM discovery_runs").fetchone()[0],
+                    0,
+                )
+
+    def test_null_durations_kept_as_long(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, durations=[None, 60, None], exclude_shorts=1)
+            run_id = run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            # NULL-duration episodes are treated as long → kept; only vid2 drops.
+            self.assertEqual(
+                self._topic_map_video_ids(db_path, run_id), {"vid1", "vid3"}
+            )
+            audit = self._run_audit(db_path, run_id)
+            self.assertEqual(audit["shorts_cutoff_seconds"], 180)
+            self.assertEqual(audit["n_episodes_total"], 3)
+            self.assertEqual(audit["n_shorts_excluded"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

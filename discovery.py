@@ -18,6 +18,13 @@ from yt_channel_analyzer.extractor.registry import (
 )
 
 
+# Duration (seconds) at or below which a video is treated as a YouTube Short
+# and excluded from discovery when the shorts filter is active. Module-level so
+# it's grep-able and overridable in tests. Videos with NULL ``duration_seconds``
+# are treated as long (never excluded) — fail-safe to legacy behavior.
+SHORTS_CUTOFF_SECONDS = 180
+
+
 @dataclass(frozen=True)
 class Chapter:
     start_seconds: int
@@ -697,6 +704,7 @@ def run_discovery(
     model: str,
     prompt_version: str,
     run_id: int | None = None,
+    exclude_shorts_override: bool | None = None,
 ) -> int:
     with connect(db_path) as connection:
         ensure_schema(connection)
@@ -711,7 +719,7 @@ def run_discovery(
 
         channel_row = connection.execute(
             """
-            SELECT id FROM channels
+            SELECT id, exclude_shorts FROM channels
             WHERE project_id = ? AND is_primary = 1
             ORDER BY id LIMIT 1
             """,
@@ -723,12 +731,59 @@ def run_discovery(
 
         video_rows = connection.execute(
             """
-            SELECT id, youtube_video_id, title, description, published_at
+            SELECT id, youtube_video_id, title, description, published_at,
+                   duration_seconds
             FROM videos WHERE channel_id = ?
             ORDER BY id
             """,
             (channel_id,),
         ).fetchall()
+
+        # Resolve the effective shorts filter for this run: a per-run CLI
+        # override (True/False) wins; otherwise fall back to the channel's
+        # sticky ``channels.exclude_shorts``. When active, pre-filter the
+        # loaded episodes here — upstream of ``_apply_renames_to_payload`` and
+        # the LLM call itself — so excluded Shorts never reach the prompt.
+        # ``duration_seconds IS NULL`` is treated as long (never excluded).
+        effective_exclude_shorts = (
+            bool(channel_row["exclude_shorts"])
+            if exclude_shorts_override is None
+            else exclude_shorts_override
+        )
+        n_episodes_total = len(video_rows)
+        shorts_cutoff_seconds: int | None = None
+        n_shorts_excluded = 0
+        if effective_exclude_shorts:
+            shorts_cutoff_seconds = SHORTS_CUTOFF_SECONDS
+            kept_rows = [
+                row
+                for row in video_rows
+                if row["duration_seconds"] is None
+                or row["duration_seconds"] > SHORTS_CUTOFF_SECONDS
+            ]
+            n_shorts_excluded = n_episodes_total - len(kept_rows)
+            if not kept_rows:
+                message = (
+                    "shorts filter (duration_seconds <= "
+                    f"{SHORTS_CUTOFF_SECONDS}) would exclude all "
+                    f"{n_episodes_total} episode(s) for this channel; re-run "
+                    "with --include-shorts (or set channels.exclude_shorts = 0) "
+                    "to include them"
+                )
+                if run_id is not None:
+                    connection.execute(
+                        """
+                        UPDATE discovery_runs
+                        SET status = 'error', error_message = ?
+                        WHERE id = ?
+                        """,
+                        (message, run_id),
+                    )
+                    connection.commit()
+                raise ValueError(message)
+        else:
+            kept_rows = list(video_rows)
+
         videos = [
             DiscoveryVideo(
                 youtube_video_id=row["youtube_video_id"],
@@ -737,9 +792,9 @@ def run_discovery(
                 published_at=row["published_at"],
                 chapters=parse_chapters_from_description(row["description"]),
             )
-            for row in video_rows
+            for row in kept_rows
         ]
-        video_id_by_yt = {row["youtube_video_id"]: row["id"] for row in video_rows}
+        video_id_by_yt = {row["youtube_video_id"]: row["id"] for row in kept_rows}
 
         # Pre-allocate the discovery_runs row so we have a stable id to thread
         # as ``correlation_id`` into the LLM call. The Discover history view
@@ -761,6 +816,20 @@ def run_discovery(
             )
             run_id = pre_cursor.lastrowid
             connection.commit()
+
+        # Stamp the shorts-filter audit fields on the run row (works for both
+        # the self-allocated path above and a caller-pre-allocated ``run_id``).
+        # ``shorts_cutoff_seconds`` is NULL when the filter is off.
+        connection.execute(
+            """
+            UPDATE discovery_runs
+            SET shorts_cutoff_seconds = ?, n_episodes_total = ?,
+                n_shorts_excluded = ?
+            WHERE id = ?
+            """,
+            (shorts_cutoff_seconds, n_episodes_total, n_shorts_excluded, run_id),
+        )
+        connection.commit()
 
         try:
             payload = _call_llm_with_optional_correlation(llm, videos, run_id)

@@ -842,6 +842,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         help="Override the Anthropic model id (defaults to extractor's DEFAULT_MODEL). Only used with --real.",
     )
+    discover_shorts = discover_parser.add_mutually_exclusive_group()
+    discover_shorts.add_argument(
+        "--exclude-shorts",
+        action="store_true",
+        help="For this run only, exclude Shorts (duration_seconds <= 180). Does not change the channel's sticky exclude_shorts setting.",
+    )
+    discover_shorts.add_argument(
+        "--include-shorts",
+        action="store_true",
+        help="For this run only, include Shorts even if the channel is set to exclude them. Does not change the channel's sticky exclude_shorts setting.",
+    )
 
     analyze_parser = subparsers.add_parser(
         "analyze",
@@ -2019,12 +2030,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "discover":
         db_path = Path(args.db_path)
         llm, model, prompt_version = _resolve_discovery_llm(db_path, args)
+        exclude_shorts_override: bool | None = None
+        if args.exclude_shorts:
+            exclude_shorts_override = True
+        elif args.include_shorts:
+            exclude_shorts_override = False
         run_id = run_discovery(
             db_path,
             project_name=args.project_name,
             llm=llm,
             model=model,
             prompt_version=prompt_version,
+            exclude_shorts_override=exclude_shorts_override,
         )
         print(f"Discovery run {run_id} complete (model={model})")
         return 0
