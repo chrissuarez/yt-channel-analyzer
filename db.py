@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 from yt_channel_analyzer.legacy.group_analysis import GroupAnalysisArtifact
 from yt_channel_analyzer.legacy.processing import ProcessedVideoArtifact, TranscriptChunk
@@ -78,13 +79,15 @@ SCHEMA_STATEMENTS = [
         confidence REAL,
         reason TEXT,
         discovery_run_id INTEGER,
+        refinement_run_id INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(video_id, topic_id),
         FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
         FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE,
         FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
+        FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE SET NULL,
         CHECK (assignment_type IN ('primary', 'secondary')),
-        CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto'))
+        CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto', 'refine'))
     );
     """,
     """
@@ -106,12 +109,14 @@ SCHEMA_STATEMENTS = [
         confidence REAL,
         reason TEXT,
         discovery_run_id INTEGER,
+        refinement_run_id INTEGER,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(video_id, subtopic_id),
         FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
         FOREIGN KEY(subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE,
         FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
-        CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto'))
+        FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE SET NULL,
+        CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto', 'refine'))
     );
     """,
     """
@@ -400,6 +405,50 @@ SCHEMA_STATEMENTS = [
         FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
     );
     """,
+    """
+    CREATE TABLE IF NOT EXISTS refinement_runs (
+        id INTEGER PRIMARY KEY,
+        channel_id INTEGER NOT NULL,
+        discovery_run_id INTEGER,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        n_sample INTEGER,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+        FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
+        CHECK (status IN ('pending', 'running', 'success', 'error'))
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS refinement_episodes (
+        refinement_run_id INTEGER NOT NULL,
+        video_id INTEGER NOT NULL,
+        transcript_status_at_run TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(refinement_run_id, video_id),
+        FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS taxonomy_proposals (
+        id INTEGER PRIMARY KEY,
+        refinement_run_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        parent_topic_name TEXT,
+        evidence TEXT,
+        source_video_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        resolved_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE CASCADE,
+        FOREIGN KEY(source_video_id) REFERENCES videos(id) ON DELETE SET NULL,
+        CHECK (kind IN ('topic', 'subtopic')),
+        CHECK (status IN ('pending', 'accepted', 'rejected'))
+    );
+    """,
 ]
 
 INDEX_STATEMENTS = [
@@ -463,6 +512,7 @@ REQUIRED_TABLE_COLUMNS = {
         "confidence": "REAL",
         "reason": "TEXT",
         "discovery_run_id": "INTEGER",
+        "refinement_run_id": "INTEGER",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "subtopics": {
@@ -479,6 +529,7 @@ REQUIRED_TABLE_COLUMNS = {
         "confidence": "REAL",
         "reason": "TEXT",
         "discovery_run_id": "INTEGER",
+        "refinement_run_id": "INTEGER",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "comparison_groups": {
@@ -599,6 +650,34 @@ REQUIRED_TABLE_COLUMNS = {
         "n_shorts_excluded": "INTEGER",
         "n_orphaned_wrong_marks": "INTEGER",
         "n_orphaned_renames": "INTEGER",
+        "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "refinement_runs": {
+        "id": "INTEGER PRIMARY KEY",
+        "channel_id": "INTEGER NOT NULL",
+        "discovery_run_id": "INTEGER",
+        "model": "TEXT NOT NULL",
+        "prompt_version": "TEXT NOT NULL",
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "n_sample": "INTEGER",
+        "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "refinement_episodes": {
+        "refinement_run_id": "INTEGER NOT NULL",
+        "video_id": "INTEGER NOT NULL",
+        "transcript_status_at_run": "TEXT",
+        "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    },
+    "taxonomy_proposals": {
+        "id": "INTEGER PRIMARY KEY",
+        "refinement_run_id": "INTEGER NOT NULL",
+        "kind": "TEXT NOT NULL",
+        "name": "TEXT NOT NULL",
+        "parent_topic_name": "TEXT",
+        "evidence": "TEXT",
+        "source_video_id": "INTEGER",
+        "status": "TEXT NOT NULL DEFAULT 'pending'",
+        "resolved_at": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
 }
@@ -1071,6 +1150,98 @@ def _repair_video_topic_assignment_source_constraint(
             )
 
 
+def _repair_video_topic_refine_source_constraint(
+    connection: sqlite3.Connection,
+) -> None:
+    """Rebuild ``video_topics`` / ``video_subtopics`` to allow
+    ``assignment_source='refine'`` and carry a nullable ``refinement_run_id``.
+
+    Mirrors ``_repair_video_topic_assignment_source_constraint``'s rename →
+    recreate → INSERT...SELECT → drop dance (no other table FKs into these two,
+    so the plain dance is enough; ``idx_video_topics_one_primary_per_video`` is
+    re-created by ``INDEX_STATEMENTS`` afterwards). The ``'refine'`` substring
+    check on the live create-SQL *is* the idempotency guard — no marker table —
+    matching the other ``_repair_*`` functions here. The INSERT...SELECT below
+    deliberately does *not* name ``refinement_run_id`` (it defaults NULL on the
+    rebuilt table): any DB reaching this branch predates the ``'refine'`` source
+    so has no refine rows, and the ``'auto'`` repair that runs just before this
+    may itself have rebuilt the table without that column.
+    """
+    if _table_exists(connection, "video_topics"):
+        sql_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'video_topics'"
+        ).fetchone()
+        create_sql = (sql_row[0] or "") if sql_row else ""
+        if "'refine'" not in create_sql:
+            connection.executescript(
+                """
+                ALTER TABLE video_topics RENAME TO video_topics_old;
+                CREATE TABLE video_topics (
+                    video_id INTEGER NOT NULL,
+                    topic_id INTEGER NOT NULL,
+                    assignment_type TEXT NOT NULL DEFAULT 'secondary',
+                    assignment_source TEXT NOT NULL DEFAULT 'manual',
+                    confidence REAL,
+                    reason TEXT,
+                    discovery_run_id INTEGER,
+                    refinement_run_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(video_id, topic_id),
+                    FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE,
+                    FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
+                    FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE SET NULL,
+                    CHECK (assignment_type IN ('primary', 'secondary')),
+                    CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto', 'refine'))
+                );
+                INSERT INTO video_topics(
+                    video_id, topic_id, assignment_type, assignment_source,
+                    confidence, reason, discovery_run_id, created_at
+                )
+                SELECT video_id, topic_id, assignment_type, assignment_source,
+                    confidence, reason, discovery_run_id, created_at
+                FROM video_topics_old;
+                DROP TABLE video_topics_old;
+                """
+            )
+
+    if _table_exists(connection, "video_subtopics"):
+        sql_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'video_subtopics'"
+        ).fetchone()
+        create_sql = (sql_row[0] or "") if sql_row else ""
+        if "'refine'" not in create_sql:
+            connection.executescript(
+                """
+                ALTER TABLE video_subtopics RENAME TO video_subtopics_old;
+                CREATE TABLE video_subtopics (
+                    video_id INTEGER NOT NULL,
+                    subtopic_id INTEGER NOT NULL,
+                    assignment_source TEXT NOT NULL DEFAULT 'manual',
+                    confidence REAL,
+                    reason TEXT,
+                    discovery_run_id INTEGER,
+                    refinement_run_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(video_id, subtopic_id),
+                    FOREIGN KEY(video_id) REFERENCES videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(subtopic_id) REFERENCES subtopics(id) ON DELETE CASCADE,
+                    FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
+                    FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE SET NULL,
+                    CHECK (assignment_source IN ('manual', 'import', 'suggested', 'auto', 'refine'))
+                );
+                INSERT INTO video_subtopics(
+                    video_id, subtopic_id, assignment_source,
+                    confidence, reason, discovery_run_id, created_at
+                )
+                SELECT video_id, subtopic_id, assignment_source,
+                    confidence, reason, discovery_run_id, created_at
+                FROM video_subtopics_old;
+                DROP TABLE video_subtopics_old;
+                """
+            )
+
+
 def _repair_discovery_runs_status_constraint(connection: sqlite3.Connection) -> None:
     if not _table_exists(connection, "discovery_runs"):
         return
@@ -1195,6 +1366,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     _repair_video_transcripts_constraint(connection)
     _repair_topic_suggestion_tables(connection)
     _repair_video_topic_assignment_source_constraint(connection)
+    _repair_video_topic_refine_source_constraint(connection)
     _repair_discovery_runs_status_constraint(connection)
     _repair_channels_exclude_shorts_default(connection)
     for statement in INDEX_STATEMENTS:
@@ -5412,3 +5584,370 @@ def supersede_stale_topic_suggestions(
             "superseded": superseded,
             "skipped": skipped,
         }
+
+
+# ---------------------------------------------------------------------------
+# Phase B — refinement runs, sampled episodes, taxonomy proposals
+#
+# These helpers take an open ``connection`` (the caller — ``refinement.py`` in
+# slice B3 — owns the transaction and calls ``ensure_schema``); they do not
+# commit. They mirror the conventions of ``discovery.py``'s internal helpers.
+# ---------------------------------------------------------------------------
+
+_REFINEMENT_RUN_STATUSES = {"pending", "running", "success", "error"}
+
+
+def build_topic_rename_resolver(
+    connection: sqlite3.Connection, project_id: int
+) -> Callable[[str], str]:
+    """Return a function mapping a topic name through this project's
+    ``topic_renames`` log to its current name, collapsing multi-hop chains
+    (A→B then B→C resolves "A" straight to "C"). Mirrors the fixed-point logic
+    in ``discovery._apply_renames_to_payload``; unknown names pass through
+    unchanged.
+    """
+    rows = connection.execute(
+        "SELECT old_name, new_name FROM topic_renames WHERE project_id = ? ORDER BY id",
+        (project_id,),
+    ).fetchall()
+    direct: dict[str, str] = {row[0]: row[1] for row in rows}
+
+    def resolve(name: str) -> str:
+        seen: set[str] = set()
+        current = name
+        while current in direct and current not in seen:
+            seen.add(current)
+            nxt = direct[current]
+            if nxt == current:
+                break
+            current = nxt
+        return current
+
+    return resolve
+
+
+def create_refinement_run(
+    connection: sqlite3.Connection,
+    *,
+    channel_id: int,
+    discovery_run_id: int | None,
+    model: str,
+    prompt_version: str,
+    n_sample: int | None,
+) -> int:
+    """Insert a ``refinement_runs`` row in ``status='pending'`` and return its id."""
+    cursor = connection.execute(
+        """
+        INSERT INTO refinement_runs(
+            channel_id, discovery_run_id, model, prompt_version, status, n_sample
+        ) VALUES (?, ?, ?, ?, 'pending', ?)
+        """,
+        (channel_id, discovery_run_id, model, prompt_version, n_sample),
+    )
+    return int(cursor.lastrowid)
+
+
+def set_refinement_run_status(
+    connection: sqlite3.Connection, run_id: int, status: str
+) -> None:
+    if status not in _REFINEMENT_RUN_STATUSES:
+        raise ValueError(
+            f"invalid refinement run status: {status!r} "
+            f"(expected one of {sorted(_REFINEMENT_RUN_STATUSES)})"
+        )
+    connection.execute(
+        "UPDATE refinement_runs SET status = ? WHERE id = ?", (status, run_id)
+    )
+
+
+def add_refinement_episodes(
+    connection: sqlite3.Connection,
+    run_id: int,
+    rows: list[tuple[int, str | None]],
+) -> None:
+    """Record the episodes a refinement run sampled.
+
+    ``rows`` is ``[(video_id, transcript_status_at_run), ...]`` (internal video
+    ids). Idempotent per ``(run_id, video_id)`` — re-recording updates the
+    stored transcript status.
+    """
+    connection.executemany(
+        """
+        INSERT INTO refinement_episodes(
+            refinement_run_id, video_id, transcript_status_at_run
+        ) VALUES (?, ?, ?)
+        ON CONFLICT(refinement_run_id, video_id) DO UPDATE SET
+            transcript_status_at_run = excluded.transcript_status_at_run
+        """,
+        [(run_id, video_id, status) for video_id, status in rows],
+    )
+
+
+def insert_taxonomy_proposals(
+    connection: sqlite3.Connection,
+    run_id: int,
+    proposals: list[dict[str, Any]],
+) -> list[int]:
+    """Insert ``taxonomy_proposals`` rows (all ``status='pending'``) and return
+    the new ids in order.
+
+    Each proposal dict: ``kind`` ('topic'|'subtopic'), ``name``,
+    ``parent_topic_name`` (ignored / forced NULL for ``kind='topic'``),
+    ``evidence`` (optional), ``source_video_id`` (optional internal id).
+    """
+    new_ids: list[int] = []
+    for proposal in proposals:
+        kind = proposal["kind"]
+        if kind not in {"topic", "subtopic"}:
+            raise ValueError(f"invalid taxonomy proposal kind: {kind!r}")
+        parent = proposal.get("parent_topic_name") if kind == "subtopic" else None
+        if kind == "subtopic" and not parent:
+            raise ValueError("subtopic proposal requires parent_topic_name")
+        cursor = connection.execute(
+            """
+            INSERT INTO taxonomy_proposals(
+                refinement_run_id, kind, name, parent_topic_name, evidence, source_video_id
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                kind,
+                proposal["name"],
+                parent,
+                proposal.get("evidence"),
+                proposal.get("source_video_id"),
+            ),
+        )
+        new_ids.append(int(cursor.lastrowid))
+    return new_ids
+
+
+def _project_id_for_refinement_run(
+    connection: sqlite3.Connection, run_id: int
+) -> int:
+    row = connection.execute(
+        """
+        SELECT channels.project_id
+        FROM refinement_runs
+        JOIN channels ON channels.id = refinement_runs.channel_id
+        WHERE refinement_runs.id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"refinement run not found: {run_id}")
+    return int(row[0])
+
+
+def accept_taxonomy_proposal(
+    connection: sqlite3.Connection, proposal_id: int
+) -> dict[str, Any]:
+    """Accept a taxonomy proposal: create the real ``topics``/``subtopics`` row
+    if it does not already exist, then mark the proposal ``accepted``.
+
+    For ``kind='subtopic'`` the parent topic name is resolved through the
+    project's rename log first; if the parent no longer exists the proposal is
+    marked ``rejected`` instead and the returned dict carries
+    ``status='rejected'`` with ``reason='parent_topic_missing'``. Idempotent —
+    re-accepting an already-accepted proposal is a no-op beyond ensuring the
+    node exists.
+    """
+    row = connection.execute(
+        """
+        SELECT id, refinement_run_id, kind, name, parent_topic_name, status
+        FROM taxonomy_proposals WHERE id = ?
+        """,
+        (proposal_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"taxonomy proposal not found: {proposal_id}")
+    pid, run_id, kind, name, parent_topic_name, _status = row
+    project_id = _project_id_for_refinement_run(connection, int(run_id))
+    resolve = build_topic_rename_resolver(connection, project_id)
+
+    if kind == "topic":
+        existing = connection.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, name),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "INSERT INTO topics(project_id, name) VALUES (?, ?)",
+                (project_id, name),
+            )
+        connection.execute(
+            "UPDATE taxonomy_proposals SET status = 'accepted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (pid,),
+        )
+        return {"proposal_id": int(pid), "status": "accepted", "kind": "topic", "name": name}
+
+    # kind == 'subtopic'
+    resolved_parent = resolve(parent_topic_name) if parent_topic_name else parent_topic_name
+    parent_row = connection.execute(
+        "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+        (project_id, resolved_parent),
+    ).fetchone()
+    if parent_row is None:
+        connection.execute(
+            "UPDATE taxonomy_proposals SET status = 'rejected', resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (pid,),
+        )
+        return {
+            "proposal_id": int(pid),
+            "status": "rejected",
+            "kind": "subtopic",
+            "name": name,
+            "parent_topic_name": resolved_parent,
+            "reason": "parent_topic_missing",
+        }
+    topic_id = int(parent_row[0])
+    existing = connection.execute(
+        "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+        (topic_id, name),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            "INSERT INTO subtopics(topic_id, name) VALUES (?, ?)",
+            (topic_id, name),
+        )
+    connection.execute(
+        "UPDATE taxonomy_proposals SET status = 'accepted', resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (pid,),
+    )
+    return {
+        "proposal_id": int(pid),
+        "status": "accepted",
+        "kind": "subtopic",
+        "name": name,
+        "parent_topic_name": resolved_parent,
+    }
+
+
+def reject_taxonomy_proposal(
+    connection: sqlite3.Connection, proposal_id: int
+) -> dict[str, Any]:
+    """Mark a taxonomy proposal ``rejected``. Does not delete any taxonomy row
+    a prior ``accept`` may have created (other episodes may already use it)."""
+    affected = connection.execute(
+        "UPDATE taxonomy_proposals SET status = 'rejected', resolved_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (proposal_id,),
+    ).rowcount
+    if affected == 0:
+        raise ValueError(f"taxonomy proposal not found: {proposal_id}")
+    return {"proposal_id": int(proposal_id), "status": "rejected"}
+
+
+def write_refine_assignments(
+    connection: sqlite3.Connection,
+    *,
+    channel_id: int,
+    refinement_run_id: int,
+    video_id: int,
+    assignments: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Replace ``video_id``'s non-curated topic/subtopic assignments wholesale
+    with transcript-grade ``assignments`` (``assignment_source='refine'``).
+
+    ``video_id`` is an internal id; each assignment dict carries ``topic_name``
+    (required, resolved through the project's rename log — must already exist),
+    optional ``subtopic_name`` (created under the topic if absent), and optional
+    ``confidence`` / ``reason``. ``assignment_source='manual'`` rows survive
+    untouched (and re-affirming their topic does not overwrite them). Rows the
+    operator previously marked via ``wrong_assignments`` are not re-added.
+    """
+    project_row = connection.execute(
+        "SELECT project_id FROM channels WHERE id = ?", (channel_id,)
+    ).fetchone()
+    if project_row is None:
+        raise ValueError(f"channel not found: {channel_id}")
+    project_id = int(project_row[0])
+    resolve = build_topic_rename_resolver(connection, project_id)
+
+    wrong_topic_ids = {
+        int(r[0])
+        for r in connection.execute(
+            "SELECT topic_id FROM wrong_assignments WHERE video_id = ? AND subtopic_id IS NULL",
+            (video_id,),
+        ).fetchall()
+    }
+    wrong_subtopic_ids = {
+        int(r[0])
+        for r in connection.execute(
+            "SELECT subtopic_id FROM wrong_assignments WHERE video_id = ? AND subtopic_id IS NOT NULL",
+            (video_id,),
+        ).fetchall()
+    }
+
+    connection.execute(
+        "DELETE FROM video_subtopics WHERE video_id = ? AND assignment_source <> 'manual'",
+        (video_id,),
+    )
+    connection.execute(
+        "DELETE FROM video_topics WHERE video_id = ? AND assignment_source <> 'manual'",
+        (video_id,),
+    )
+
+    topics_written = 0
+    subtopics_written = 0
+    suppressed = 0
+    for assignment in assignments:
+        topic_name = resolve(assignment["topic_name"])
+        topic_row = connection.execute(
+            "SELECT id FROM topics WHERE project_id = ? AND name = ?",
+            (project_id, topic_name),
+        ).fetchone()
+        if topic_row is None:
+            raise ValueError(
+                f"refine assignment references unknown topic: {topic_name!r}"
+            )
+        topic_id = int(topic_row[0])
+        if topic_id in wrong_topic_ids:
+            suppressed += 1
+            continue
+        confidence = assignment.get("confidence")
+        reason = assignment.get("reason")
+        connection.execute(
+            """
+            INSERT INTO video_topics(
+                video_id, topic_id, assignment_type, assignment_source,
+                confidence, reason, discovery_run_id, refinement_run_id
+            ) VALUES (?, ?, 'secondary', 'refine', ?, ?, NULL, ?)
+            ON CONFLICT(video_id, topic_id) DO NOTHING
+            """,
+            (video_id, topic_id, confidence, reason, refinement_run_id),
+        )
+        topics_written += 1
+
+        subtopic_name = assignment.get("subtopic_name")
+        if not subtopic_name:
+            continue
+        connection.execute(
+            "INSERT INTO subtopics(topic_id, name) VALUES (?, ?) ON CONFLICT(topic_id, name) DO NOTHING",
+            (topic_id, subtopic_name),
+        )
+        subtopic_row = connection.execute(
+            "SELECT id FROM subtopics WHERE topic_id = ? AND name = ?",
+            (topic_id, subtopic_name),
+        ).fetchone()
+        subtopic_id = int(subtopic_row[0])
+        if subtopic_id in wrong_subtopic_ids:
+            suppressed += 1
+            continue
+        connection.execute(
+            """
+            INSERT INTO video_subtopics(
+                video_id, subtopic_id, assignment_source,
+                confidence, reason, discovery_run_id, refinement_run_id
+            ) VALUES (?, ?, 'refine', ?, ?, NULL, ?)
+            ON CONFLICT(video_id, subtopic_id) DO NOTHING
+            """,
+            (video_id, subtopic_id, confidence, reason, refinement_run_id),
+        )
+        subtopics_written += 1
+
+    return {
+        "video_id": int(video_id),
+        "topics_written": topics_written,
+        "subtopics_written": subtopics_written,
+        "suppressed": suppressed,
+    }

@@ -5041,6 +5041,10 @@ def _build_discovery_topic_map(
             connection, int(run_row["channel_id"]), int(run_row["id"])
         )
 
+        # Rows from this discovery run, plus transcript-grade ('refine') rows
+        # the operator's Refine stage wrote against any of this run's topics
+        # (those carry discovery_run_id NULL — see db.write_refine_assignments).
+        run_id_int = run_row["id"]
         topic_rows = connection.execute(
             """
             SELECT topics.id AS topic_id,
@@ -5050,10 +5054,14 @@ def _build_discovery_topic_map(
             FROM video_topics
             JOIN topics ON topics.id = video_topics.topic_id
             WHERE video_topics.discovery_run_id = ?
+               OR (video_topics.assignment_source = 'refine'
+                   AND video_topics.topic_id IN (
+                       SELECT topic_id FROM video_topics WHERE discovery_run_id = ?
+                   ))
             GROUP BY topics.id, topics.name
             ORDER BY episode_count DESC, topics.name COLLATE NOCASE
             """,
-            (run_row["id"],),
+            (run_id_int, run_id_int),
         ).fetchall()
 
         episode_rows = connection.execute(
@@ -5065,13 +5073,18 @@ def _build_discovery_topic_map(
                    videos.published_at AS published_at,
                    videos.duration_seconds AS duration_seconds,
                    video_topics.confidence AS confidence,
-                   video_topics.reason AS reason
+                   video_topics.reason AS reason,
+                   video_topics.assignment_source AS assignment_source
             FROM video_topics
             JOIN videos ON videos.id = video_topics.video_id
             WHERE video_topics.discovery_run_id = ?
+               OR (video_topics.assignment_source = 'refine'
+                   AND video_topics.topic_id IN (
+                       SELECT topic_id FROM video_topics WHERE discovery_run_id = ?
+                   ))
             ORDER BY video_topics.confidence DESC, videos.title COLLATE NOCASE
             """,
-            (run_row["id"],),
+            (run_id_int, run_id_int),
         ).fetchall()
 
         subtopic_rows = connection.execute(
@@ -5083,9 +5096,15 @@ def _build_discovery_topic_map(
             JOIN subtopics ON subtopics.id = video_subtopics.subtopic_id
             JOIN videos ON videos.id = video_subtopics.video_id
             WHERE video_subtopics.discovery_run_id = ?
+               OR (video_subtopics.assignment_source = 'refine'
+                   AND video_subtopics.subtopic_id IN (
+                       SELECT id FROM subtopics WHERE topic_id IN (
+                           SELECT topic_id FROM video_topics WHERE discovery_run_id = ?
+                       )
+                   ))
             ORDER BY subtopics.name COLLATE NOCASE
             """,
-            (run_row["id"],),
+            (run_id_int, run_id_int),
         ).fetchall()
 
     topic_id_to_name: dict[int, str] = {
@@ -5124,6 +5143,7 @@ def _build_discovery_topic_map(
                     float(row["confidence"]) if row["confidence"] is not None else None
                 ),
                 "reason": row["reason"],
+                "assignment_source": row["assignment_source"],
                 "also_in": also_in,
             }
         )
