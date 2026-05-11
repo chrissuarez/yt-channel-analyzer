@@ -14,6 +14,8 @@ from yt_channel_analyzer.db import (
     create_topic,
     ensure_schema,
     init_db,
+    mark_assignment_wrong,
+    rename_topic,
     upsert_videos_for_primary_channel,
 )
 from yt_channel_analyzer import cli
@@ -6858,13 +6860,15 @@ class ShortsStockpileSchemaTests(unittest.TestCase):
              "n_orphaned_wrong_marks", "n_orphaned_renames"}.issubset(runs_cols)
         )
 
-    def test_exclude_shorts_defaults_to_zero(self) -> None:
+    def test_exclude_shorts_defaults_to_one(self) -> None:
+        # Slice C flipped the column default: brand-new channels start with the
+        # shorts filter on.
         with TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "default.sqlite3"
             _seed_channel_with_videos(db_path)
             with connect(db_path) as conn:
                 row = conn.execute("SELECT exclude_shorts FROM channels WHERE is_primary = 1").fetchone()
-            self.assertEqual(row[0], 0)
+            self.assertEqual(row[0], 1)
 
 
 class FetchVideoDurationsTests(unittest.TestCase):
@@ -6994,10 +6998,11 @@ class ShortsFilterDiscoveryTests(unittest.TestCase):
                 for i, dur in enumerate(durations, start=1)
             ],
         )
-        if exclude_shorts:
-            with connect(db_path) as conn:
-                conn.execute("UPDATE channels SET exclude_shorts = 1")
-                conn.commit()
+        with connect(db_path) as conn:
+            conn.execute(
+                "UPDATE channels SET exclude_shorts = ?", (exclude_shorts,)
+            )
+            conn.commit()
 
     @staticmethod
     def _recording_stub():
@@ -7193,6 +7198,369 @@ class ShortsFilterDiscoveryTests(unittest.TestCase):
             self.assertEqual(audit["shorts_cutoff_seconds"], 180)
             self.assertEqual(audit["n_episodes_total"], 3)
             self.assertEqual(audit["n_shorts_excluded"], 1)
+
+
+class ShortsFlipDefaultMigrationTests(unittest.TestCase):
+    """Slice C — one-shot `exclude_shorts` default flip on existing DBs."""
+
+    _PRE_C_CHANNELS_SQL = """
+        CREATE TABLE channels (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            youtube_channel_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            handle TEXT,
+            description TEXT,
+            published_at TEXT,
+            thumbnail_url TEXT,
+            last_refreshed_at TEXT,
+            is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+            exclude_shorts INTEGER NOT NULL DEFAULT 0 CHECK (exclude_shorts IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            UNIQUE(project_id, youtube_channel_id)
+        )
+    """
+
+    def _seed_pre_c_db(self, db_path: Path) -> None:
+        with connect(db_path) as conn:
+            conn.execute(
+                "CREATE TABLE projects (id INTEGER PRIMARY KEY, name TEXT NOT NULL "
+                "UNIQUE, slug TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+            )
+            conn.execute(self._PRE_C_CHANNELS_SQL)
+            conn.execute(
+                """
+                CREATE TABLE videos (
+                    id INTEGER PRIMARY KEY,
+                    channel_id INTEGER NOT NULL,
+                    youtube_video_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    published_at TEXT,
+                    description TEXT,
+                    thumbnail_url TEXT,
+                    duration_seconds INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+                    UNIQUE(channel_id, youtube_video_id)
+                )
+                """
+            )
+            conn.execute("INSERT INTO projects(name) VALUES ('p')")
+            conn.execute(
+                "INSERT INTO channels(project_id, youtube_channel_id, title, "
+                "is_primary, exclude_shorts) VALUES (1, 'UCa', 'A', 1, 0)"
+            )
+            conn.execute(
+                "INSERT INTO channels(project_id, youtube_channel_id, title, "
+                "exclude_shorts) VALUES (1, 'UCb', 'B', 0)"
+            )
+            conn.execute(
+                "INSERT INTO videos(channel_id, youtube_video_id, title) "
+                "VALUES (1, 'v1', 'V1')"
+            )
+            conn.commit()
+
+    def test_migration_flips_every_channel_once_and_is_idempotent(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "preC.sqlite3"
+            self._seed_pre_c_db(db_path)
+
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                vals = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT exclude_shorts FROM channels "
+                        "ORDER BY youtube_channel_id"
+                    )
+                ]
+                self.assertEqual(vals, [1, 1])
+                create_sql = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' "
+                    "AND name='channels'"
+                ).fetchone()[0]
+                self.assertIn(
+                    "exclude_shorts INTEGER NOT NULL DEFAULT 1", create_sql
+                )
+                self.assertNotIn(
+                    "exclude_shorts INTEGER NOT NULL DEFAULT 0", create_sql
+                )
+                # FK child rows survive the table rebuild.
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM videos WHERE channel_id = 1"
+                    ).fetchone()[0],
+                    1,
+                )
+                self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+            # A channel manually flipped back to 0 must not be re-flipped on the
+            # next ensure_schema (idempotency guard = create-SQL inspection).
+            with connect(db_path) as conn:
+                conn.execute(
+                    "UPDATE channels SET exclude_shorts = 0 "
+                    "WHERE youtube_channel_id = 'UCb'"
+                )
+                conn.commit()
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                self.assertEqual(
+                    dict(
+                        conn.execute(
+                            "SELECT youtube_channel_id, exclude_shorts FROM channels"
+                        )
+                    ),
+                    {"UCa": 1, "UCb": 0},
+                )
+
+    def test_fresh_db_defaults_exclude_shorts_to_one(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "fresh.sqlite3"
+            with connect(db_path) as conn:
+                ensure_schema(conn)
+                conn.execute(
+                    "INSERT INTO projects(name) VALUES ('p')"
+                )
+                conn.execute(
+                    "INSERT INTO channels(project_id, youtube_channel_id, title) "
+                    "VALUES (1, 'UCx', 'X')"
+                )
+                conn.commit()
+                self.assertEqual(
+                    conn.execute(
+                        "SELECT exclude_shorts FROM channels WHERE youtube_channel_id='UCx'"
+                    ).fetchone()[0],
+                    1,
+                )
+
+
+class ShortsOrphanCountTests(unittest.TestCase):
+    """Slice C — `run_discovery` curation-orphan counts + UI badge payload."""
+
+    @staticmethod
+    def _orphan_llm():
+        """A stub that always assigns every kept video to 'Long Topic' and,
+        only when the short ``vidS`` survives the filter, also to
+        'Shorts-Only Topic' — so that topic loses all evidence once the filter
+        drops the short.
+        """
+        def llm(videos, *, correlation_id=None):
+            ids = [v.youtube_video_id for v in videos]
+            assignments = [
+                DiscoveryAssignment(
+                    youtube_video_id=i,
+                    topic_name="Long Topic",
+                    confidence=1.0,
+                    reason="r",
+                    subtopic_name=None,
+                )
+                for i in ids
+            ]
+            if "vidS" in ids:
+                assignments.append(
+                    DiscoveryAssignment(
+                        youtube_video_id="vidS",
+                        topic_name="Shorts-Only Topic",
+                        confidence=0.9,
+                        reason="r",
+                        subtopic_name=None,
+                    )
+                )
+            return DiscoveryPayload(
+                topics=["Long Topic", "Shorts-Only Topic"],
+                subtopics=[],
+                assignments=assignments,
+            )
+
+        return llm
+
+    def _seed(self, db_path: Path, *, exclude_shorts: int) -> None:
+        init_db(
+            db_path,
+            project_name="proj",
+            channel_id="UC123",
+            channel_title="Channel",
+            channel_handle="@channel",
+        )
+        upsert_videos_for_primary_channel(
+            db_path,
+            videos=[
+                VideoMetadata(
+                    youtube_video_id="vid1",
+                    title="Long episode",
+                    description="desc",
+                    published_at="2026-04-01T12:00:00Z",
+                    thumbnail_url=None,
+                    duration_seconds=300,
+                ),
+                VideoMetadata(
+                    youtube_video_id="vidS",
+                    title="Short clip",
+                    description="desc",
+                    published_at="2026-04-02T12:00:00Z",
+                    thumbnail_url=None,
+                    duration_seconds=60,
+                ),
+            ],
+        )
+        self._set_exclude_shorts(db_path, exclude_shorts)
+
+    @staticmethod
+    def _set_exclude_shorts(db_path: Path, value: int) -> None:
+        with connect(db_path) as conn:
+            conn.execute("UPDATE channels SET exclude_shorts = ?", (value,))
+            conn.commit()
+
+    def _run(self, db_path: Path):
+        return run_discovery(
+            db_path,
+            project_name="proj",
+            llm=self._orphan_llm(),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def _audit(self, db_path: Path, run_id: int):
+        with connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT n_shorts_excluded, n_orphaned_wrong_marks, "
+                "n_orphaned_renames FROM discovery_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+
+    def test_orphan_counts_populated_and_curation_rows_survive(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            # Run 1 with the filter OFF: both videos present, both topics get
+            # evidence; then the user curates against the short.
+            self._seed(db_path, exclude_shorts=0)
+            run1 = self._run(db_path)
+            audit1 = self._audit(db_path, run1)
+            self.assertEqual(audit1["n_shorts_excluded"], 0)
+            self.assertIsNone(audit1["n_orphaned_wrong_marks"])
+            self.assertIsNone(audit1["n_orphaned_renames"])
+
+            mark_assignment_wrong(
+                db_path,
+                project_name="proj",
+                topic_name="Long Topic",
+                youtube_video_id="vidS",
+            )
+            rename_topic(
+                db_path,
+                project_name="proj",
+                current_name="Shorts-Only Topic",
+                new_name="Shorts-Only Topic (renamed)",
+            )
+
+            # Run 2 with the filter ON: vidS (60s) is dropped → its wrong-mark
+            # and the rename whose target now has no kept evidence are counted.
+            self._set_exclude_shorts(db_path, 1)
+            run2 = self._run(db_path)
+            audit2 = self._audit(db_path, run2)
+            self.assertEqual(audit2["n_shorts_excluded"], 1)
+            self.assertEqual(audit2["n_orphaned_wrong_marks"], 1)
+            self.assertEqual(audit2["n_orphaned_renames"], 1)
+
+            # The curation rows themselves are never deleted by the filter.
+            with connect(db_path) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM wrong_assignments").fetchone()[0],
+                    1,
+                )
+                self.assertEqual(
+                    conn.execute("SELECT COUNT(*) FROM topic_renames").fetchone()[0],
+                    1,
+                )
+
+            # Run 3 with the filter OFF again: orphan counts go back to NULL and
+            # the woken-back-up wrong-mark suppresses vidS's re-created topic
+            # assignment.
+            self._set_exclude_shorts(db_path, 0)
+            run3 = self._run(db_path)
+            audit3 = self._audit(db_path, run3)
+            self.assertEqual(audit3["n_shorts_excluded"], 0)
+            self.assertIsNone(audit3["n_orphaned_wrong_marks"])
+            self.assertIsNone(audit3["n_orphaned_renames"])
+            with connect(db_path) as conn:
+                kept = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT v.youtube_video_id FROM video_topics vt "
+                        "JOIN videos v ON v.id = vt.video_id "
+                        "JOIN topics t ON t.id = vt.topic_id "
+                        "WHERE vt.discovery_run_id = ? AND t.name = 'Long Topic'",
+                        (run3,),
+                    )
+                }
+            self.assertEqual(kept, {"vid1"})  # vidS suppressed by the wrong-mark
+
+    def test_discovery_payload_carries_audit_counts_and_badge(self) -> None:
+        from yt_channel_analyzer.review_ui import _build_discovery_topic_map
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, exclude_shorts=0)
+            run1 = self._run(db_path)
+            mark_assignment_wrong(
+                db_path,
+                project_name="proj",
+                topic_name="Long Topic",
+                youtube_video_id="vidS",
+            )
+            rename_topic(
+                db_path,
+                project_name="proj",
+                current_name="Shorts-Only Topic",
+                new_name="Shorts-Only Topic (renamed)",
+            )
+            self._set_exclude_shorts(db_path, 1)
+            run2 = self._run(db_path)
+
+            block2 = _build_discovery_topic_map(db_path, run_id=run2)
+            self.assertEqual(block2["n_shorts_excluded"], 1)
+            self.assertEqual(block2["n_orphaned_wrong_marks"], 1)
+            self.assertEqual(block2["n_orphaned_renames"], 1)
+            self.assertEqual(
+                block2["shorts_filter_badge"],
+                "1 shorts excluded · 2 curation actions inert "
+                "(target episodes filtered)",
+            )
+
+            # Filter-off run on this same channel: nothing excluded, nothing
+            # inert → the badge is suppressed entirely.
+            block1 = _build_discovery_topic_map(db_path, run_id=run1)
+            self.assertIsNone(block1["shorts_filter_badge"])
+
+    def test_badge_hidden_when_filter_off_and_no_orphans(self) -> None:
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            self._seed(db_path, exclude_shorts=0)
+            run1 = self._run(db_path)
+            payload = build_state_payload(db_path, discovery_run_id=run1)
+            self.assertIsNone(
+                payload["discovery_topic_map"]["shorts_filter_badge"]
+            )
+
+
+class ShortsFilterBadgeHtmlTests(unittest.TestCase):
+    def test_ui_revision_advances_for_shorts_filter(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("shorts-filter", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("channel-overview", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+    def test_html_page_renders_shorts_badge(self) -> None:
+        from yt_channel_analyzer.review_ui import HTML_PAGE
+
+        self.assertIn("discovery-shorts-badge", HTML_PAGE)
+        self.assertIn("shorts_filter_badge", HTML_PAGE)
 
 
 if __name__ == "__main__":

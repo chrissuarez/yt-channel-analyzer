@@ -27,6 +27,20 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-11 — Shorts filter slice C: default flipped to exclude_shorts=1
+
+### Done
+- `feat/issue-03-shorts-flip-default-ui`, Ralph iter 1. **Behavior change for every channel**: `channels.exclude_shorts` now `DEFAULT 1` (`SCHEMA_STATEMENTS` + `REQUIRED_TABLE_COLUMNS`). Existing DBs migrated by `_repair_channels_exclude_shorts_default` in `ensure_schema()` — `UPDATE channels SET exclude_shorts=1` then RENAME/CREATE/INSERT-SELECT/DROP rebuild of `channels` with `DEFAULT 1` (legacy_alter_table + foreign_keys=OFF, same dance as `_repair_discovery_runs_status_constraint`). Idempotency guard = create-SQL inspection (no marker table). So: next `discover` on DOAC drops Shorts (`duration_seconds <= 180`, NULL=long/kept) → cleaner topic map.
+- `run_discovery` now populates `discovery_runs.n_orphaned_wrong_marks` (wrong_assignments whose video is now filtered, scoped to channel — known pre-LLM) and `n_orphaned_renames` (topic_renames whose target topic has no kept episode assigned this run — computed post-persist, after `_suppress_wrong_assignments_in_run`). Both NULL when filter off. Curation rows never deleted — flip exclude_shorts=0 + re-run → they wake back up.
+- `review_ui.py`: `_build_discovery_topic_map` carries `n_shorts_excluded`/`n_orphaned_*` + a precomputed `shorts_filter_badge` string (`"X shorts excluded · Y curation actions inert (target episodes filtered)"`, None when all zero); `#discovery-shorts-badge` div + `renderShortsBadge()` in `renderDiscoveryTopicMap`. ~49 net lines (cap 200). `UI_REVISION` += `-shorts-filter-badge`.
+- Tests: `ShortsFlipDefaultMigrationTests` (one-shot flip + idempotent + FK children survive rebuild + fresh-DB default=1), `ShortsOrphanCountTests` (orphan counts populated/NULL, curation rows survive, woken wrong-mark re-suppresses), `ShortsFilterBadgeHtmlTests`. `test_exclude_shorts_defaults_to_zero` → `_to_one`; slice-B `_seed` now sets exclude_shorts explicitly (new schema default would otherwise = 1). 295 tests green.
+
+### Next (operator HITL — branch NOT auto-mergeable)
+- Review the destructive `channels` table rebuild migration before merge (Ralph HITL trigger #3).
+- Real-LLM verify (operator-only, `RALPH_ALLOW_REAL_LLM=1`): re-run `discover --real` on a real DOAC DB → confirm topic map cleaner than prior run, `n_shorts_excluded`/orphan counts populated, badge renders on `:8765`. Do NOT run from Ralph.
+
+---
+
 ## 2026-05-10 — CURRENT_STATE.md refresh + subtopic-autoheal slice 14 GREEN
 
 ### Done

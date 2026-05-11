@@ -753,6 +753,12 @@ def run_discovery(
         n_episodes_total = len(video_rows)
         shorts_cutoff_seconds: int | None = None
         n_shorts_excluded = 0
+        # Curation-orphan counts: only meaningful when the filter is active —
+        # left NULL on the run row when it's off. ``n_orphaned_wrong_marks`` is
+        # known as soon as we know the cutoff; ``n_orphaned_renames`` needs the
+        # post-filter assignment set, so it's computed after persistence below.
+        n_orphaned_wrong_marks: int | None = None
+        n_orphaned_renames: int | None = None
         if effective_exclude_shorts:
             shorts_cutoff_seconds = SHORTS_CUTOFF_SECONDS
             kept_rows = [
@@ -762,6 +768,19 @@ def run_discovery(
                 or row["duration_seconds"] > SHORTS_CUTOFF_SECONDS
             ]
             n_shorts_excluded = n_episodes_total - len(kept_rows)
+            # Count wrong-marks whose target episode is now filtered out. These
+            # rows are never deleted — if the user later flips exclude_shorts=0
+            # and re-runs, they wake back up. Scoped to this channel.
+            n_orphaned_wrong_marks = connection.execute(
+                """
+                SELECT COUNT(*) FROM wrong_assignments wa
+                JOIN videos v ON v.id = wa.video_id
+                WHERE v.channel_id = ?
+                  AND v.duration_seconds IS NOT NULL
+                  AND v.duration_seconds <= ?
+                """,
+                (channel_id, SHORTS_CUTOFF_SECONDS),
+            ).fetchone()[0]
             if not kept_rows:
                 message = (
                     "shorts filter (duration_seconds <= "
@@ -824,10 +843,16 @@ def run_discovery(
             """
             UPDATE discovery_runs
             SET shorts_cutoff_seconds = ?, n_episodes_total = ?,
-                n_shorts_excluded = ?
+                n_shorts_excluded = ?, n_orphaned_wrong_marks = ?
             WHERE id = ?
             """,
-            (shorts_cutoff_seconds, n_episodes_total, n_shorts_excluded, run_id),
+            (
+                shorts_cutoff_seconds,
+                n_episodes_total,
+                n_shorts_excluded,
+                n_orphaned_wrong_marks,
+                run_id,
+            ),
         )
         connection.commit()
 
@@ -957,6 +982,30 @@ def run_discovery(
                     )
 
             _suppress_wrong_assignments_in_run(connection, channel_id, run_id)
+
+            # Now that this run's assignments are persisted (and wrong-marked
+            # ones suppressed), count rename targets that lost all evidence:
+            # a topic_renames row is orphaned if no episode kept in this run is
+            # assigned to its target topic. Only computed when the filter is
+            # active — left NULL otherwise. Like wrong-marks, the renames
+            # themselves are never deleted, just counted.
+            if effective_exclude_shorts:
+                n_orphaned_renames = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM topic_renames tr
+                    WHERE tr.project_id = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM video_topics vt
+                          WHERE vt.topic_id = tr.topic_id
+                            AND vt.discovery_run_id = ?
+                      )
+                    """,
+                    (project_id, run_id),
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE discovery_runs SET n_orphaned_renames = ? WHERE id = ?",
+                    (n_orphaned_renames, run_id),
+                )
 
             connection.execute(
                 "UPDATE discovery_runs SET status = 'success' WHERE id = ?",

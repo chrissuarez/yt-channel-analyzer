@@ -74,7 +74,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -2260,6 +2260,7 @@ HTML_PAGE = """<!doctype html>
           </div>
           <div id="discovery-topic-map-meta" class="muted"></div>
         </div>
+        <div id="discovery-shorts-badge" class="muted" hidden></div>
         <div id="review-overview">
           <div id="discovery-topic-map-grid" class="topic-map-grid"></div>
           <p class="overview-hint">Click a pillar to focus it.</p>
@@ -2906,16 +2907,30 @@ HTML_PAGE = """<!doctype html>
       const minimap = document.getElementById('minimap');
       const meta = document.getElementById('discovery-topic-map-meta');
       const lede = document.getElementById('review-lede');
+      const shortsBadge = document.getElementById('discovery-shorts-badge');
+
+      function renderShortsBadge(text) {
+        if (!shortsBadge) return;
+        if (text) {
+          shortsBadge.textContent = text;
+          shortsBadge.hidden = false;
+        } else {
+          shortsBadge.textContent = '';
+          shortsBadge.hidden = true;
+        }
+      }
 
       if (!map) {
         canvas.classList.remove('is-focused');
         state.focusedTopic = null;
         grid.innerHTML = '<div class="empty">No discovery run yet. Run <code>analyze --stub</code> or <code>discover --stub</code> to populate this panel.</div>';
         meta.textContent = '';
+        renderShortsBadge(null);
         if (lede) lede.textContent = 'No discovery run yet — run discover to populate the topic map.';
         return;
       }
       meta.textContent = `Run #${map.run_id} · ${map.model} · ${map.prompt_version} · ${map.status} · ${map.created_at}`;
+      renderShortsBadge(map.shorts_filter_badge);
 
       const topics = (map.topics || []).slice();
       if (!topics.length) {
@@ -4974,10 +4989,14 @@ def _build_discovery_topic_map(
 ) -> dict[str, Any] | None:
     with sqlite3.connect(db_path) as connection:
         connection.row_factory = sqlite3.Row
+        _run_cols = (
+            "id, channel_id, model, prompt_version, status, created_at, "
+            "n_shorts_excluded, n_orphaned_wrong_marks, n_orphaned_renames"
+        )
         if run_id is None:
             run_row = connection.execute(
-                """
-                SELECT id, channel_id, model, prompt_version, status, created_at
+                f"""
+                SELECT {_run_cols}
                 FROM discovery_runs
                 ORDER BY id DESC
                 LIMIT 1
@@ -4985,8 +5004,8 @@ def _build_discovery_topic_map(
             ).fetchone()
         else:
             run_row = connection.execute(
-                """
-                SELECT id, channel_id, model, prompt_version, status, created_at
+                f"""
+                SELECT {_run_cols}
                 FROM discovery_runs
                 WHERE id = ?
                 """,
@@ -5122,6 +5141,22 @@ def _build_discovery_topic_map(
             "unassigned_within_topic": unassigned,
         }
 
+    # Read-only shorts-filter badge: hidden entirely when this run excluded no
+    # Shorts and orphaned no curation actions (no noise on channels with no
+    # Shorts). NULL audit values (filter was off) read as 0. Render-side only.
+    n_shorts_excluded = run_row["n_shorts_excluded"] or 0
+    n_orphaned_wrong_marks = run_row["n_orphaned_wrong_marks"] or 0
+    n_orphaned_renames = run_row["n_orphaned_renames"] or 0
+    inert_curation_actions = n_orphaned_wrong_marks + n_orphaned_renames
+    if n_shorts_excluded == 0 and inert_curation_actions == 0:
+        shorts_filter_badge = None
+    else:
+        shorts_filter_badge = (
+            f"{n_shorts_excluded} shorts excluded · "
+            f"{inert_curation_actions} curation actions inert "
+            "(target episodes filtered)"
+        )
+
     return {
         "run_id": int(run_row["id"]),
         "model": run_row["model"],
@@ -5131,6 +5166,10 @@ def _build_discovery_topic_map(
         "low_confidence_threshold": _load_low_confidence_threshold(),
         "topics": [_topic_payload(row) for row in topic_rows],
         "new_topic_names": new_topic_names,
+        "n_shorts_excluded": run_row["n_shorts_excluded"],
+        "n_orphaned_wrong_marks": run_row["n_orphaned_wrong_marks"],
+        "n_orphaned_renames": run_row["n_orphaned_renames"],
+        "shorts_filter_badge": shorts_filter_badge,
     }
 
 

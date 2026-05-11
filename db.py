@@ -35,7 +35,7 @@ SCHEMA_STATEMENTS = [
         thumbnail_url TEXT,
         last_refreshed_at TEXT,
         is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
-        exclude_shorts INTEGER NOT NULL DEFAULT 0 CHECK (exclude_shorts IN (0, 1)),
+        exclude_shorts INTEGER NOT NULL DEFAULT 1 CHECK (exclude_shorts IN (0, 1)),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
         UNIQUE(project_id, youtube_channel_id)
@@ -433,7 +433,7 @@ REQUIRED_TABLE_COLUMNS = {
         "thumbnail_url": "TEXT",
         "last_refreshed_at": "TEXT",
         "is_primary": "INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1))",
-        "exclude_shorts": "INTEGER NOT NULL DEFAULT 0 CHECK (exclude_shorts IN (0, 1))",
+        "exclude_shorts": "INTEGER NOT NULL DEFAULT 1 CHECK (exclude_shorts IN (0, 1))",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "videos": {
@@ -1121,6 +1121,71 @@ def _repair_discovery_runs_status_constraint(connection: sqlite3.Connection) -> 
     connection.executescript("PRAGMA foreign_keys = ON;")
 
 
+def _repair_channels_exclude_shorts_default(connection: sqlite3.Connection) -> None:
+    """One-shot migration: flip the shorts filter on for every channel.
+
+    Pre-slice-C DBs have ``exclude_shorts INTEGER NOT NULL DEFAULT 0``. This
+    flips every existing channel to ``exclude_shorts = 1`` once, then rebuilds
+    the ``channels`` table so the create-SQL says ``DEFAULT 1``. After the
+    rebuild the substring check below fails, so this is a no-op on every
+    subsequent ``ensure_schema()`` — that create-SQL inspection *is* the
+    idempotency guard (matching the other repair functions in this file; no
+    marker table). A channel a user manually sets back to 0 post-migration
+    stays 0, because the UPDATE only runs while the create-SQL still says
+    ``DEFAULT 0``.
+    """
+    if not _table_exists(connection, "channels"):
+        return
+    sql_row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'channels'"
+    ).fetchone()
+    create_sql = (sql_row[0] or "") if sql_row else ""
+    if "exclude_shorts INTEGER NOT NULL DEFAULT 0" not in create_sql:
+        return
+
+    connection.execute("UPDATE channels SET exclude_shorts = 1")
+    # Rebuild ``channels`` with the new default. videos/discovery_runs FK
+    # channel_id, so use the same legacy_alter_table + foreign_keys=OFF dance
+    # as _repair_discovery_runs_status_constraint to keep child schemas/rows
+    # intact across the RENAME/DROP. INDEX_STATEMENTS (run after this in
+    # ensure_schema) recreates idx_channels_one_primary_per_project.
+    connection.executescript("PRAGMA foreign_keys = OFF;")
+    connection.executescript("PRAGMA legacy_alter_table = ON;")
+    connection.executescript(
+        """
+        ALTER TABLE channels RENAME TO channels_old;
+        CREATE TABLE channels (
+            id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            youtube_channel_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            handle TEXT,
+            description TEXT,
+            published_at TEXT,
+            thumbnail_url TEXT,
+            last_refreshed_at TEXT,
+            is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+            exclude_shorts INTEGER NOT NULL DEFAULT 1 CHECK (exclude_shorts IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+            UNIQUE(project_id, youtube_channel_id)
+        );
+        INSERT INTO channels(
+            id, project_id, youtube_channel_id, title, handle, description,
+            published_at, thumbnail_url, last_refreshed_at, is_primary,
+            exclude_shorts, created_at
+        )
+        SELECT id, project_id, youtube_channel_id, title, handle, description,
+            published_at, thumbnail_url, last_refreshed_at, is_primary,
+            exclude_shorts, created_at
+        FROM channels_old;
+        DROP TABLE channels_old;
+        """
+    )
+    connection.executescript("PRAGMA legacy_alter_table = OFF;")
+    connection.executescript("PRAGMA foreign_keys = ON;")
+
+
 def ensure_schema(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     for statement in SCHEMA_STATEMENTS:
@@ -1131,6 +1196,7 @@ def ensure_schema(connection: sqlite3.Connection) -> None:
     _repair_topic_suggestion_tables(connection)
     _repair_video_topic_assignment_source_constraint(connection)
     _repair_discovery_runs_status_constraint(connection)
+    _repair_channels_exclude_shorts_default(connection)
     for statement in INDEX_STATEMENTS:
         cursor.executescript(statement)
 
