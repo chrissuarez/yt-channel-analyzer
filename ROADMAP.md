@@ -141,16 +141,19 @@ Frozen design (via `/grill-me`, user-confirmed every fork) lives in `.scratch/sh
 
 ## Future phases (planned, not active)
 
-### Phase B — Sample-based taxonomy refinement
-Priority: medium
+### Phase B — Sample-based transcript refinement  ← **next active phase**
+Priority: high (Phase A complete; shorts filter complete)
 
-Resume after Phase A has been used on at least one real channel for a week.
+Full spec: `PRD_PHASE_B.md`. Design walked via /grill-me 2026-05-11; every fork operator-confirmed. Process ~15 representative non-Short transcripts; per-transcript LLM call re-judges the episode's assignments from what was said and proposes topics/subtopics the metadata pass missed (with transcript evidence); operator accepts proposals → real taxonomy nodes; a follow-up taxonomy-aware `discover` re-run spreads them channel-wide. **No claim extraction / embeddings / clustering / full-channel fetch — those are Phase C.** ~$0.40 for a 15-episode sample.
 
-- [ ] Add transcript fetching for a sampled subset (15–20 episodes representative of all topics)
-- [ ] Run a coarse claim extraction pass on the sample
-- [ ] Cluster sampled claims; surface clusters that don't fit the existing taxonomy
-- [ ] User reviews proposed taxonomy additions/splits
-- [ ] Apply changes to the topic map
+Six tracer-bullet slices (each its own `feat/issue-NN-<slug>` branch off `main`; order 1→2→3, 4 anytime, 5→6 after 3; docs/cheatsheet/WORKLOG folded into 1/3/6):
+
+- [ ] **B1 — `fetch-transcripts` CLI + non-legacy fetch path.** Selector-mutex command (`--video-ids` / `--missing-only` / `--limit` / `--refinement-run-id`), resumable via `--missing-only`, rate-limit backoff, `--stub` fake fetcher, injectable fetcher, status tally; reuses the `video_transcripts` table; new `test_transcripts_fetch.py` → verify gate. No LLM. Leave the legacy `fetch-group-transcripts` untouched.
+- [ ] **B2 — Refinement schema + db helpers.** `refinement_runs` / `refinement_episodes` / `taxonomy_proposals` tables; `assignment_source='refine'` + nullable `refinement_run_id` on `video_topics`/`video_subtopics` (CHECK-rebuild repair + additive column, same dance as the slice-A/C migrations); db.py helpers (create/advance run, insert/accept/reject proposal, write refine assignments); topic-map query widened to include refine rows. Additive + the one rebuild. No CLI/LLM.
+- [ ] **B3 — `refinement.py` core + `refine --stub` CLI.** ⅔ coverage / ⅓ blind-spot sample picker + one replacement round; internal transcript fetch for the sample; `refinement.transcript` prompt registered in `extractor/`; per-transcript `Extractor.run_batch`; persist run/episodes/proposals/refine-assignments (replace-wholesale per sampled episode, user-curated wins); `stub_refinement_llm` (echoes assignments + one deterministic subtopic proposal per episode + one deterministic topic proposal for the first episode); `make_real_refinement_llm_callable` (`RALPH_ALLOW_REAL_LLM=1` gate); CLI `refine --db-path --project-name [--discovery-run-id] [--video-ids] [--sample-size] --stub|--real [--yes]` with pre-flight cost estimate + confirm for `--real`; `test_refinement.py` → verify gate. (Likely two Ralph iterations: picker+fetch, then LLM+persist+CLI.)
+- [ ] **B4 — Discovery prompt taxonomy awareness.** Feed the current curated topic/subtopic names into the discovery prompt ("reuse these names exactly where they fit; you may add new ones"); bump `DISCOVERY_PROMPT_VERSION`; make `run_discovery`'s `ON CONFLICT` on the junction tables never downgrade a `refine`/`manual` row (keep its source + transcript-grade confidence/reason). Small, independent. This is the mechanism by which accepted proposals reach the rest of the channel.
+- [ ] **B5 — Refine UI: sample-setup screen.** New stand-alone "Refine" stage in the stepper; `/api/refine/sample` (GET auto-pick) + `/api/refine` (POST → daemon-thread `run_refinement`, same async pattern as `/api/discover`) + `/api/refine/status/<id>`; the setup/edit/fetch-and-estimate/confirm-run screen. Stays under the 300-changed-line `review_ui.py` HITL pause.
+- [ ] **B6 — Refine UI: proposal-review screen.** Render `taxonomy_proposals` (grouped, all pending across runs, newest first), Accept/Reject endpoints (accept creates the node, parent-resolved through the rename map; idempotent), before→after sanity panel per sampled episode (reusing the existing mark-wrong endpoint), "re-run discovery" nudge linking the Discover stage, and a "transcript-checked" pill on `assignment_source='refine'` episode cards in the topic map.
 
 ### Phase C — Full claim extraction and synthesis
 Priority: medium-high (once Phase A feels right)

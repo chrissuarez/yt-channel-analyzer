@@ -37,8 +37,20 @@ The user-facing artifact: the set of curated **Topics** + **Subtopics** + **Assi
 _Avoid_: Taxonomy (too generic), categorisation.
 
 **Extractor**:
-The deep Module that owns LLM-call mechanics: provider invocation, structured-output validation, retry, prompt versioning, batch facade, and audit logging. Callers (currently `discovery.py`; later `claim_extraction.py` in Phase C) supply a registered prompt + typed context and receive a validated `ParsedResult`. The Module hides the LLM provider behind its **Seam** so callers don't know or care which model ran the call.
+The deep Module that owns LLM-call mechanics: provider invocation, structured-output validation, retry, prompt versioning, batch facade, and audit logging. Callers (currently `discovery.py` and — Phase B — `refinement.py`; later `claim_extraction.py` in Phase C) supply a registered prompt + typed context and receive a validated `ParsedResult`. The Module hides the LLM provider behind its **Seam** so callers don't know or care which model ran the call.
 _Avoid_: LLM client, prompt runner, AI helper.
+
+**Transcript** _(Phase B onward)_:
+The fetched-and-stored text of an **Episode** (from `youtube-transcript-api`), with a status (`available`/`disabled`/`not_found`/…) and a source (`manual`/`generated`). Lives in the `video_transcripts` table. Phase B fetches transcripts for a refinement sample; Phase C fetches them channel-wide.
+_Avoid_: caption file, subtitles, VTT.
+
+**RefinementRun** _(Phase B onward)_:
+One sample-based refinement pass: a chosen subset of an **Episode** set is transcribed, each **Transcript** is sent to the **Extractor**, and the run produces transcript-grade **Assignments** (`source = "refine"`) for the sampled **Episodes** plus a set of **TaxonomyProposals**. Recorded in `refinement_runs` (mirrors **DiscoveryRun**). A new run never overwrites an old one.
+_Avoid_: refresh, re-scan, sample run.
+
+**TaxonomyProposal** _(Phase B onward)_:
+A proposed new **Topic** or **Subtopic** surfaced by a **RefinementRun** from transcript evidence, carrying the parent **Topic** (for subtopic proposals), an evidence snippet, the source **Episode**, and a status (`pending`/`accepted`/`rejected`). Accepting one creates the real **Topic**/**Subtopic**; it is then subject to the same **Curation** stickiness as any other taxonomy node.
+_Avoid_: suggestion, candidate topic, tag proposal.
 
 **Claim** _(Phase C onward)_:
 An atomic piece of advice, opinion, factual statement, or anecdote extracted from an **Episode** transcript, carrying its **Topic**/**Subtopic**, the speaking guest, the source **Episode**, and a timestamp. Phase C will introduce a `claims` table; Phase D queries operate over **Claim** clusters.
@@ -52,7 +64,8 @@ _Avoid_: Insight, snippet, quote (too narrow), statement (too vague).
 - A **Topic** has many **Subtopics**.
 - A **DiscoveryRun** produces many **Assignments** (`source = "auto"`).
 - **Curation** events overlay **Assignments** and survive subsequent **DiscoveryRuns**.
-- The **Extractor** is invoked by `discovery.py` to produce a **DiscoveryRun**'s contents, and (later) by `claim_extraction.py` to produce **Claims**.
+- The **Extractor** is invoked by `discovery.py` to produce a **DiscoveryRun**'s contents, by `refinement.py` (Phase B) to produce a **RefinementRun**'s contents, and (later) by `claim_extraction.py` to produce **Claims**.
+- An **Episode** has at most one **Transcript**. A **RefinementRun** consumes the **Transcripts** of its sampled **Episodes** and emits **TaxonomyProposals** plus `source = "refine"` **Assignments**. Accepting a **TaxonomyProposal** adds a **Topic**/**Subtopic** that a later **DiscoveryRun** then populates channel-wide.
 
 ## Example dialogue
 
