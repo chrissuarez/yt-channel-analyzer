@@ -58,11 +58,12 @@ The strategy is **retrofit in place**, not greenfield — most of the existing ~
 
 ## Current build focus
 
-Phase A is shipped and validated on real DOAC data. The remaining work is small follow-up slices polishing the live system. Three open threads as of 2026-05-10:
+Phase A is shipped and validated on real DOAC data. The **shorts filter** feature is complete (3/3 slices merged to main 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length). **Phase B ("sample-based transcript refinement") is designed and sliced** — `PRD_PHASE_B.md`, `ROADMAP.md` §B, and 6 issue files in `.scratch/phase-b-refinement/issues/` are committed on branch `docs/phase-b-prd` (not yet merged); design walked via /grill-me, frozen. See the 2026-05-11 WORKLOG entry. **Next moves:** merge `docs/phase-b-prd` → main; then start `feat/issue-01-fetch-transcripts` off main (recommended first execution step: a fresh `discover --real` on DOAC now that the Shorts default is on, so refinement samples a clean non-Short run).
+
+Smaller open threads still on the polish list:
 
 1. **Haiku subtopic-divergence auto-recover** ($-affecting). Live smoke surfaced Haiku occasionally producing assignments that reference subtopics it didn't declare in `payload.subtopics`. Strict validator in `discovery.py` raises `ValueError`; user pays ~$0.05 per occurrence. Fix: auto-recover by appending the missing subtopic to `payload.subtopics` before strict validation.
 2. **Server-side Supply sort.** `supplySort='oldest'` is currently a client-side `.reverse()` of the loaded N — shows oldest *of loaded N*, not channel's true oldest. Push the ORDER BY toggle into `_build_supply_videos`.
-3. **Phase B/C scoping.** With Phase A closed, the next planning question is Phase B vs. folding Phase C transcript work back in.
 
 Beyond these, longer-tail items worth flagging when they bite:
 - Fuzzy-match fallback for sticky-curation chain (Haiku word-choice variance silently bypasses rename/wrong-mark when the LLM rephrases — e.g., "Personal Development & Success" → "Personal Development & Discipline" gets a new topic_id, escapes the exact-string-match curation chain).
