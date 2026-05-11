@@ -3125,6 +3125,9 @@ HTML_PAGE = """<!doctype html>
         ? `<button class="subtopic-video-wrong" type="button" style="margin-left:0;"
                 onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(episode.youtube_video_id || '')}, ${JSON.stringify(subForButton)})'>✗ Wrong subtopic</button>`
         : '';
+      const publishedHtml = episode.published_at
+        ? `<span>${escapeHtml(formatDate(episode.published_at))}</span>`
+        : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -3132,6 +3135,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">conf ${escapeHtml(pct)}</span>
+              ${publishedHtml}
               <span>${escapeHtml(episode.youtube_video_id || '')}</span>
               ${alsoInHtml}
             </div>
@@ -3186,6 +3190,12 @@ HTML_PAGE = """<!doctype html>
       const thumbHtml = episode.thumbnail_url
         ? `<img class="discovery-episode-thumb" alt="" loading="lazy" src="${escapeHtml(episode.thumbnail_url)}">`
         : '<div class="discovery-episode-thumb placeholder" aria-hidden="true"></div>';
+      const watchUrl = episode.youtube_video_id
+        ? `https://www.youtube.com/watch?v=${encodeURIComponent(episode.youtube_video_id)}`
+        : null;
+      const watchBtn = watchUrl
+        ? `<a class="primary-action" style="text-decoration:none;display:inline-flex;align-items:center;gap:6px;padding:4px 8px;font-size:11px;border-radius:8px;margin-right:6px;" href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener">▶ Watch</a>`
+        : '';
       const wrongButton = topicName
         ? `<button class="discovery-episode-wrong"
                    type="button"
@@ -3195,6 +3205,9 @@ HTML_PAGE = """<!doctype html>
       const alsoInHtml = alsoIn.length
         ? `<span class="discovery-episode-also-in">also in: ${alsoIn.map((name) => escapeHtml(name)).join(', ')}</span>`
         : '';
+      const publishedHtml = episode.published_at
+        ? `<span class="muted">${escapeHtml(formatDate(episode.published_at))}</span>`
+        : '';
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -3202,11 +3215,15 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">${escapeHtml(pct)}</span>
+              ${publishedHtml}
               <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
               ${alsoInHtml}
             </div>
             ${reasonHtml}
-            ${wrongButton}
+            <div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              ${watchBtn}
+              ${wrongButton}
+            </div>
           </div>
         </li>
       `;
@@ -3266,8 +3283,23 @@ HTML_PAGE = """<!doctype html>
       document.getElementById('selected-topic-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
+    function videoChipWatchHtml(video) {
+      if (!video.youtube_video_id) return '';
+      const url = `https://www.youtube.com/watch?v=${encodeURIComponent(video.youtube_video_id)}`;
+      return `<a class="primary-action" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px;padding:3px 8px;font-size:11px;border-radius:8px;margin-top:6px;margin-right:6px;" href="${escapeHtml(url)}" target="_blank" rel="noopener">▶ Watch</a>`;
+    }
+
+    function videoChipMetaHtml(video) {
+      const parts = [];
+      if (video.published_at) parts.push(escapeHtml(formatDate(video.published_at)));
+      if (video.youtube_video_id) parts.push(escapeHtml(video.youtube_video_id));
+      return parts.length
+        ? `<div class="meta">${parts.join(' · ')}</div>`
+        : '';
+    }
+
     function videoChipHtml(video) {
-      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div></div>`;
+      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}${videoChipMetaHtml(video)}${videoChipWatchHtml(video)}</div>`;
     }
 
     function subtopicVideoChipHtml(video, topicName, currentSubtopic, candidateSubtopics) {
@@ -3279,7 +3311,7 @@ HTML_PAGE = """<!doctype html>
       const wrongButton = `<button class="subtopic-video-wrong"
                                    type="button"
                                    onclick='markEpisodeWrong(${JSON.stringify(topicName)}, ${JSON.stringify(video.youtube_video_id || '')}, ${JSON.stringify(currentSubtopic)})'>Wrong subtopic?</button>`;
-      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}<div class="meta">${escapeHtml(video.youtube_video_id || '')}</div>${moveButton}${wrongButton}</div>`;
+      return `<div class="video-chip">${escapeHtml(video.title || '(untitled)')}${videoChipMetaHtml(video)}${videoChipWatchHtml(video)}${moveButton}${wrongButton}</div>`;
     }
 
     async function moveEpisodeSubtopic(topicName, currentSubtopic, youtubeVideoId, candidates) {
@@ -3797,6 +3829,9 @@ HTML_PAGE = """<!doctype html>
         const titleHtml = watchUrl
           ? `<a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener" class="sv-title-link">${escapeHtml(v.title)}</a>`
           : escapeHtml(v.title);
+        const watchBtn = watchUrl
+          ? `<a class="primary-action" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px;padding:4px 10px;font-size:12px;border-radius:8px;" href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener">▶ Watch</a>`
+          : '';
         return `
           <div class="supply-row">
             <div class="sv-thumb" ${thumb}></div>
@@ -3805,6 +3840,7 @@ HTML_PAGE = """<!doctype html>
               <div class="sv-meta">${metaHtml}</div>
             </div>
             <div class="sv-actions">
+              ${watchBtn}
               ${transcriptPill(v.transcript_status)}
               <span class="sv-hint">${transcriptHint(v)}</span>
             </div>
@@ -4596,6 +4632,7 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
                 videos.id AS video_id,
                 videos.youtube_video_id,
                 videos.title,
+                videos.published_at,
                 CASE WHEN video_transcripts.video_id IS NOT NULL THEN 1 ELSE 0 END
                     AS transcript_available,
                 CASE WHEN processed_videos.video_id IS NOT NULL THEN 1 ELSE 0 END
@@ -4617,7 +4654,7 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
         ).fetchall()
         unassigned_rows = connection.execute(
             """
-            SELECT DISTINCT videos.youtube_video_id, videos.title
+            SELECT DISTINCT videos.youtube_video_id, videos.title, videos.published_at
             FROM videos
             JOIN video_topics ON video_topics.video_id = videos.id
             JOIN topics ON topics.id = video_topics.topic_id
@@ -4653,7 +4690,11 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
             continue
         bucket["_seen_video_ids"].add(video_id)
         bucket["videos"].append(
-            {"youtube_video_id": row["youtube_video_id"], "title": row["title"]}
+            {
+                "youtube_video_id": row["youtube_video_id"],
+                "title": row["title"],
+                "published_at": row["published_at"],
+            }
         )
         if int(row["transcript_available"] or 0):
             bucket["transcript_count"] += 1
@@ -4686,7 +4727,11 @@ def _build_topic_inventory(db_path: Path, *, topic_name: str | None) -> dict[str
         "topic": topic_name,
         "subtopics": subtopic_buckets,
         "unassigned_videos": [
-            {"youtube_video_id": row["youtube_video_id"], "title": row["title"]}
+            {
+                "youtube_video_id": row["youtube_video_id"],
+                "title": row["title"],
+                "published_at": row["published_at"],
+            }
             for row in unassigned_rows
         ],
     }

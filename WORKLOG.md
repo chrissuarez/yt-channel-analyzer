@@ -2019,3 +2019,23 @@ Read first next time: `CURRENT_STATE.md`, `PRD_PHASE_A_TOPIC_MAP.md`,
 ### Next
 - Optional: stream/poll in-flight discovery status — modal still sits frozen during the synchronous request.
 - Optional: server-side sort for Supply (currently client-side `.reverse()` in JS, so `oldest` shows the oldest of the most-recent-N rather than the channel's true oldest).
+
+## 2026-05-10 — Watch button + published date on every video surface (UNCOMMITTED on main)
+
+- User feedback: "wherever you display a video," add published date + a Watch button. Scope confirmed via question → "Active Phase A only" (skipped legacy topic/subtopic suggestion samples + applications).
+- `review_ui.py` only — 51 +/ 6 -.
+  - `renderDiscoveryEpisodeItemFocused`: published-date span added to meta row (Watch already present).
+  - `renderDiscoveryEpisodeItem` (compact, used in subtopic buckets): new Watch button + date span. Buttons row gained a flex wrapper under reason.
+  - New shared helpers `videoChipMetaHtml(v)` (date · YT id) + `videoChipWatchHtml(v)` (▶ Watch link). `videoChipHtml` and `subtopicVideoChipHtml` both consume them — chips in topic-inventory now show date + watch.
+  - `_build_topic_inventory` SQL: added `videos.published_at` to both subtopic and unassigned-rows SELECTs; dict outputs include `published_at`. No test pinned the chip dict shape — additive change.
+  - Supply rows (`renderSupply`): explicit ▶ Watch button added to `.sv-actions` alongside transcript pill (the title was already a watch link, but a discrete button matches the spec).
+- Date format: reuses existing `formatDate(value)` which trims to YYYY-MM-DD.
+- Verify gate: 272 tests green, no new tests added (pure UI + additive SQL).
+- Dev server: killed stale PID 26041 (started 08:25 from a prior session via `nohup`), restarted on `0.0.0.0:8765` against `tmp/doac-sticky.sqlite` for visual check.
+
+## 2026-05-10 — Shorts filter design (issue files only, no code)
+
+- User flagged YT Shorts polluting topic frequency on channels where shorts are re-cuts of long videos. /grill-me design pass; nine forks resolved with user confirmation on every choice.
+- Decisions (full rationale in `.scratch/shorts-filter/issues/` + memory `project_shorts_filter.md`): filter not dedup, `duration_seconds <= 180` cutoff (NULL → long), per-channel sticky `exclude_shorts` + per-run CLI override default exclude, upstream of LLM and sticky-curation, audit + read-only UI badge, explicit `backfill-durations` CLI, `fetch_recent_videos` always pulls duration going forward.
+- Three issue files written: `01-A-stockpile.md` (schema + ingest + backfill, no behavior change), `02-B-filter-logic.md` (filter + per-run override flags, default still 0), `03-C-flip-default-ui.md` (default flip + orphan counts + read-only badge — only slice that costs LLM tokens to verify on DOAC).
+- No code changes this session; main was already dirty (`WORKLOG.md`, `review_ui.py` — pre-existing UNCOMMITTED Watch+date pass from prior session).
