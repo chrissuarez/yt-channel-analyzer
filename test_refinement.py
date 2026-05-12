@@ -24,6 +24,7 @@ from yt_channel_analyzer.extractor.runner import Extractor
 from yt_channel_analyzer.refinement import (
     REFINEMENT_PROMPT_NAME,
     REFINEMENT_PROMPT_VERSION,
+    allocate_refinement_run,
     make_real_refinement_llm_callable,
     refinement_llm_via_extractor,
     register_refinement_prompt,
@@ -517,6 +518,55 @@ class DescribeRefinementSampleTests(unittest.TestCase):
                 describe_refinement_sample(
                     db_path, project_name="proj", discovery_run_id=999
                 )
+
+
+class PreAllocatedRunTests(unittest.TestCase):
+    def test_run_id_updates_pre_allocated_row_instead_of_inserting(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = _fresh_db(tmp)
+            _seed(db_path, [("a1", 600, [("Health", 0.5)]), ("a2", 600, [("Health", 0.6)])])
+            run_id = allocate_refinement_run(db_path, project_name="proj")
+            pending = _query(
+                db_path, "SELECT status, n_sample, discovery_run_id FROM refinement_runs WHERE id = ?", (run_id,)
+            )[0]
+            self.assertEqual(pending["status"], "pending")
+            self.assertIsNone(pending["n_sample"])
+
+            result = run_refinement(
+                db_path,
+                project_name="proj",
+                transcript_fetcher=_fetcher(),
+                run_id=run_id,
+                out=_QUIET,
+            )
+            self.assertEqual(result.run_id, run_id)
+            self.assertEqual(result.status, "success")
+            runs = _query(db_path, "SELECT id, status, n_sample, discovery_run_id FROM refinement_runs")
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["id"], run_id)
+            self.assertEqual(runs[0]["status"], "success")
+            self.assertEqual(runs[0]["n_sample"], 2)
+            self.assertIsNotNone(runs[0]["discovery_run_id"])
+
+    def test_failure_flips_pre_allocated_row_to_error(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = _fresh_db(tmp)
+            _seed(db_path, [("a1", 600, [("Health", 0.5)])])
+            run_id = allocate_refinement_run(db_path, project_name="proj")
+            with self.assertRaises(ValueError):
+                run_refinement(
+                    db_path,
+                    project_name="proj",
+                    sample=["not-a-video"],
+                    transcript_fetcher=_fetcher(),
+                    run_id=run_id,
+                    out=_QUIET,
+                )
+            row = _query(
+                db_path, "SELECT status, error_message FROM refinement_runs WHERE id = ?", (run_id,)
+            )[0]
+            self.assertEqual(row["status"], "error")
+            self.assertIsNotNone(row["error_message"])
 
 
 if __name__ == "__main__":

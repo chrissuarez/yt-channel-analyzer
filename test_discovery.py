@@ -8025,5 +8025,141 @@ class RefineFetchTranscriptsEndpointTests(unittest.TestCase):
             self.assertIn("video_ids", json.loads(body)["error"])
 
 
+class RefineRunEndpointTests(unittest.TestCase):
+    def _call_app(
+        self, app, method: str, path: str, body: dict | None = None
+    ) -> tuple[str, str]:
+        raw = json.dumps(body or {}).encode("utf-8")
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(raw)),
+            "wsgi.input": io.BytesIO(raw),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_run(self, db_path: Path) -> None:
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def _app(self, db_path: Path, **kwargs):
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+        from yt_channel_analyzer.youtube import stub_transcript_fetcher
+
+        return ReviewUIApp(
+            db_path,
+            transcript_fetcher=kwargs.pop("transcript_fetcher", stub_transcript_fetcher),
+            transcript_fetch_request_interval=0.0,
+            run_in_background=False,
+            **kwargs,
+        )
+
+    def test_refine_run_creates_run_and_status_reports_it(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = self._app(db_path)
+            status, body = self._call_app(app, "POST", "/api/refine", {"mode": "stub"})
+            self.assertEqual(status, "200 OK")
+            run_id = json.loads(body)["refinement_run_id"]
+            self.assertIsInstance(run_id, int)
+
+            status, body = self._call_app(app, "GET", f"/api/refine/status/{run_id}")
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertEqual(payload["id"], run_id)
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["n_sample"], 2)
+            # stub LLM emits one subtopic proposal per episode + one topic
+            # proposal for the first episode.
+            self.assertEqual(payload["n_proposals"], 3)
+            self.assertIsNotNone(payload["discovery_run_id"])
+            self.assertNotIn("error", payload)
+
+    def test_refine_run_video_ids_override_picks_only_those(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = self._app(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/refine", {"mode": "stub", "video_ids": ["vid1"]}
+            )
+            self.assertEqual(status, "200 OK")
+            run_id = json.loads(body)["refinement_run_id"]
+
+            _, body = self._call_app(app, "GET", f"/api/refine/status/{run_id}")
+            payload = json.loads(body)
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["n_sample"], 1)
+            self.assertEqual(payload["n_proposals"], 2)
+
+    def test_refine_run_rejects_unknown_mode(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = self._app(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/refine", {"mode": "bogus"}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("mode", json.loads(body)["error"])
+
+    def test_refine_run_real_mode_requires_env_gate(self) -> None:
+        import os as _os
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = self._app(db_path)
+            saved = _os.environ.pop("RALPH_ALLOW_REAL_LLM", None)
+            try:
+                status, body = self._call_app(
+                    app, "POST", "/api/refine", {"mode": "real"}
+                )
+            finally:
+                if saved is not None:
+                    _os.environ["RALPH_ALLOW_REAL_LLM"] = saved
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("RALPH_ALLOW_REAL_LLM", json.loads(body)["error"])
+
+    def test_refine_run_status_unknown_id_is_400(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = self._app(db_path)
+            status, body = self._call_app(app, "GET", "/api/refine/status/9999")
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("not found", json.loads(body)["error"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()

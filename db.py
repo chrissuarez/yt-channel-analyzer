@@ -414,6 +414,7 @@ SCHEMA_STATEMENTS = [
         prompt_version TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending',
         n_sample INTEGER,
+        error_message TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(channel_id) REFERENCES channels(id) ON DELETE CASCADE,
         FOREIGN KEY(discovery_run_id) REFERENCES discovery_runs(id) ON DELETE SET NULL,
@@ -660,6 +661,7 @@ REQUIRED_TABLE_COLUMNS = {
         "prompt_version": "TEXT NOT NULL",
         "status": "TEXT NOT NULL DEFAULT 'pending'",
         "n_sample": "INTEGER",
+        "error_message": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "refinement_episodes": {
@@ -5657,6 +5659,16 @@ def set_refinement_run_status(
         )
     connection.execute(
         "UPDATE refinement_runs SET status = ? WHERE id = ?", (status, run_id)
+    )
+
+
+def set_refinement_run_error(
+    connection: sqlite3.Connection, run_id: int, message: str
+) -> None:
+    """Flip a refinement run to ``status='error'`` and record ``message``."""
+    connection.execute(
+        "UPDATE refinement_runs SET status = 'error', error_message = ? WHERE id = ?",
+        (message, run_id),
     )
 
 

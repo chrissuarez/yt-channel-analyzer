@@ -80,6 +80,7 @@ REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
 SUPPLY_MAX_LIMIT = 500
 DISCOVER_MODES = ("stub", "real")
+REFINE_MODES = ("stub", "real")
 
 DEFAULT_LOW_CONFIDENCE_THRESHOLD = 0.5
 LOW_CONFIDENCE_THRESHOLD_ENV_VAR = "YTA_LOW_CONFIDENCE_THRESHOLD"
@@ -5573,6 +5574,59 @@ def _default_discover_runner(
     raise ReviewUIError(f"unknown discover mode: {mode!r}")
 
 
+def _default_refine_runner(
+    db_path: Path,
+    *,
+    mode: str,
+    run_id: int,
+    video_ids: list[str] | None,
+    discovery_run_id: int | None,
+    transcript_fetcher: Any,
+) -> None:
+    """Default runner for ``POST /api/refine``: drives ``run_refinement``
+    against the pre-allocated ``refinement_runs`` row.
+
+    ``stub`` mode uses the deterministic stub LLM (free, offline); ``real``
+    mode opens a sqlite connection for the Extractor's ``llm_calls`` audit and
+    builds the Anthropic-backed callable — the ``RALPH_ALLOW_REAL_LLM=1`` gate
+    is enforced inside ``make_real_refinement_llm_callable``. ``run_refinement``
+    already flips the run row to ``error`` on any failure.
+    """
+    from yt_channel_analyzer import refinement
+
+    project_name = _resolve_primary_project_name(db_path)
+    common = dict(
+        project_name=project_name,
+        discovery_run_id=discovery_run_id,
+        sample=video_ids,
+        transcript_fetcher=transcript_fetcher,
+        run_id=run_id,
+        out=lambda *_a, **_k: None,
+    )
+    if mode == "stub":
+        refinement.run_refinement(
+            db_path,
+            llm=refinement.stub_refinement_llm,
+            model=refinement.STUB_MODEL,
+            **common,
+        )
+        return
+    if mode == "real":
+        connection = connect(db_path)
+        try:
+            llm = refinement.make_real_refinement_llm_callable(connection)
+            refinement.run_refinement(
+                db_path,
+                llm=llm,
+                model=refinement.DEFAULT_REAL_MODEL,
+                **common,
+            )
+        finally:
+            connection.close()
+        return
+    raise ReviewUIError(f"unknown refine mode: {mode!r}")
+
+
 class ReviewUIApp:
     def __init__(
         self,
@@ -5582,6 +5636,7 @@ class ReviewUIApp:
         channel_metadata_fetcher: Any = None,
         channel_videos_fetcher: Any = None,
         discover_runner: Any = None,
+        refine_runner: Any = None,
         transcript_fetcher: Any = None,
         transcript_fetch_request_interval: float = 1.0,
         run_in_background: bool = True,
@@ -5591,6 +5646,7 @@ class ReviewUIApp:
         self._channel_metadata_fetcher = channel_metadata_fetcher or _real_fetch_channel_metadata
         self._channel_videos_fetcher = channel_videos_fetcher or _real_fetch_channel_videos
         self._discover_runner = discover_runner or _default_discover_runner
+        self._refine_runner = refine_runner or _default_refine_runner
         # Injectable transcript fetcher for the Refine-stage fetch endpoint
         # (None → the real youtube-transcript-api fetcher inside
         # ``run_fetch_transcripts``); tests pass ``stub_transcript_fetcher``.
@@ -5660,6 +5716,17 @@ class ReviewUIApp:
                 return self._json_response(
                     start_response, self._refine_sample(discovery_run_id)
                 )
+            if method == "GET" and path.startswith("/api/refine/status/"):
+                tail = path[len("/api/refine/status/"):]
+                try:
+                    run_id_int = int(tail)
+                except ValueError as exc:
+                    raise ReviewUIError(
+                        f"invalid refinement_run id: {tail!r}"
+                    ) from exc
+                return self._json_response(
+                    start_response, self._refine_run_status(run_id_int)
+                )
             if method == "POST" and path.startswith("/api/"):
                 body = self._read_json_body(environ)
                 payload = self._handle_post(path, body)
@@ -5677,6 +5744,8 @@ class ReviewUIApp:
             return self._discover(body)
         if path == "/api/refine/fetch-transcripts":
             return self._refine_fetch_transcripts(body)
+        if path == "/api/refine":
+            return self._refine_run(body)
         if path == "/api/channel/edit":
             return self._channel_edit(body)
         run_id_raw = body.get("run_id")
@@ -6277,6 +6346,115 @@ class ReviewUIApp:
                 flush=True,
             )
 
+    def _refine_run(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /api/refine`` — body ``{mode?, video_ids?, discovery_run_id?}``.
+
+        ``mode`` is ``'stub'`` or ``'real'`` (default ``'real'``). ``video_ids``
+        (YouTube ids of primary-channel episodes) overrides the auto-picker when
+        given; ``discovery_run_id`` pins the discovery run (else the latest).
+        Allocates a ``refinement_runs`` row, kicks ``run_refinement`` off on a
+        daemon thread (same async pattern as ``POST /api/discover``), and returns
+        the run id immediately — the client polls ``GET /api/refine/status/<id>``
+        until terminal.
+        """
+        mode = _normalize_text(body.get("mode")) or "real"
+        if mode not in REFINE_MODES:
+            raise ReviewUIError(
+                f"invalid mode: {mode!r} (must be one of {', '.join(REFINE_MODES)})"
+            )
+        # UX-only pre-check (the canonical gate is in
+        # ``make_real_refinement_llm_callable``) so a missing env var doesn't
+        # leave a stale 'pending' row behind.
+        if mode == "real" and os.environ.get("RALPH_ALLOW_REAL_LLM") != "1":
+            raise ReviewUIError(
+                "Real LLM calls are gated behind RALPH_ALLOW_REAL_LLM=1. "
+                "Set it before retrying."
+            )
+
+        raw_ids = body.get("video_ids")
+        video_ids: list[str] | None = None
+        if raw_ids is not None:
+            if not isinstance(raw_ids, list) or not raw_ids:
+                raise ReviewUIError(
+                    "video_ids must be a non-empty list of YouTube video ids"
+                )
+            video_ids = []
+            for item in raw_ids:
+                text = _normalize_text(item) if isinstance(item, str) else None
+                if text is None:
+                    raise ReviewUIError("video_ids entries must be non-empty strings")
+                if text not in video_ids:
+                    video_ids.append(text)
+
+        discovery_run_id_raw = body.get("discovery_run_id")
+        discovery_run_id = (
+            int(discovery_run_id_raw)
+            if discovery_run_id_raw not in (None, "")
+            else None
+        )
+
+        from yt_channel_analyzer.refinement import allocate_refinement_run
+
+        project_name = _resolve_primary_project_name(self.db_path)
+        run_id = allocate_refinement_run(self.db_path, project_name=project_name)
+
+        if self._run_in_background:
+            thread = threading.Thread(
+                target=self._refine_runner_safe,
+                args=(mode, run_id, video_ids, discovery_run_id),
+                daemon=True,
+                name=f"refine-run-{run_id}",
+            )
+            thread.start()
+        else:
+            # Synchronous path for tests. ``run_refinement`` already flips the
+            # run row to 'error' on failure; surface gate RuntimeErrors as 400.
+            try:
+                self._refine_runner(
+                    self.db_path,
+                    mode=mode,
+                    run_id=run_id,
+                    video_ids=video_ids,
+                    discovery_run_id=discovery_run_id,
+                    transcript_fetcher=self._transcript_fetcher,
+                )
+            except RuntimeError as exc:
+                raise ReviewUIError(str(exc)) from exc
+
+        return {
+            "ok": True,
+            "refinement_run_id": run_id,
+            "mode": mode,
+            "message": f"Refinement run {run_id} started (mode={mode}).",
+        }
+
+    def _refine_runner_safe(
+        self,
+        mode: str,
+        run_id: int,
+        video_ids: list[str] | None,
+        discovery_run_id: int | None,
+    ) -> None:
+        """Background-thread entrypoint for ``POST /api/refine``. ``run_refinement``
+        flips the run row to 'error' on any failure, so the polling client always
+        sees a terminal state; we just log to stderr for the dev-server log."""
+        try:
+            self._refine_runner(
+                self.db_path,
+                mode=mode,
+                run_id=run_id,
+                video_ids=video_ids,
+                discovery_run_id=discovery_run_id,
+                transcript_fetcher=self._transcript_fetcher,
+            )
+        except Exception as exc:  # pragma: no cover - defensive thread guard
+            import sys
+            print(
+                f"[refine-run-{run_id}] background run failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
     def _refine_sample(self, discovery_run_id: int | None) -> dict[str, Any]:
         """``GET /api/refine/sample`` — the slice-B3 auto-picked sample for the
         active channel's latest (or the given) discovery run. Read-only."""
@@ -6384,6 +6562,34 @@ class ReviewUIApp:
             "prompt_version": row["prompt_version"],
             "created_at": row["created_at"],
         }
+
+    def _refine_run_status(self, run_id: int) -> dict[str, Any]:
+        with connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                """
+                SELECT id, status, error_message, n_sample, discovery_run_id, created_at
+                FROM refinement_runs WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise ReviewUIError(f"refinement run not found: {run_id}")
+            n_proposals = connection.execute(
+                "SELECT COUNT(*) AS c FROM taxonomy_proposals WHERE refinement_run_id = ?",
+                (run_id,),
+            ).fetchone()["c"]
+        result: dict[str, Any] = {
+            "id": int(row["id"]),
+            "status": row["status"],
+            "n_sample": row["n_sample"],
+            "n_proposals": int(n_proposals),
+            "discovery_run_id": row["discovery_run_id"],
+            "created_at": row["created_at"],
+        }
+        if row["error_message"] is not None:
+            result["error"] = row["error_message"]
+        return result
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
         length_raw = environ.get("CONTENT_LENGTH") or "0"

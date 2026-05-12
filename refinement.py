@@ -791,6 +791,37 @@ def estimate_refinement_cost_usd(
 # --------------------------------------------------------------------------
 
 
+def allocate_refinement_run(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    model: str = STUB_MODEL,
+    prompt_version: str = REFINEMENT_PROMPT_VERSION,
+) -> int:
+    """Insert a ``refinement_runs`` row (``status='pending'``) and return its id.
+
+    Used by the review-UI handler that spawns ``run_refinement`` on a daemon
+    thread: pre-allocating up-front lets the request return the run id before
+    the (slow) transcript fetch + LLM batch start. Mirrors
+    ``discovery.allocate_discovery_run``. The discovery run and ``n_sample`` are
+    filled in by ``run_refinement`` once the sample is resolved.
+    """
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        connection.row_factory = sqlite3.Row
+        _project_id, channel_id = _resolve_channel(connection, project_name)
+        run_id = db.create_refinement_run(
+            connection,
+            channel_id=channel_id,
+            discovery_run_id=None,
+            model=model,
+            prompt_version=prompt_version,
+            n_sample=None,
+        )
+        connection.commit()
+    return run_id
+
+
 def run_refinement(
     db_path: str | Path,
     *,
@@ -802,6 +833,7 @@ def run_refinement(
     sample_size: int = 15,
     model: str = STUB_MODEL,
     confirm: Callable[[dict[str, Any]], bool] | None = None,
+    run_id: int | None = None,
     out: Callable[[str], Any] = print,
 ) -> RefinementRun:
     """Run sample-based transcript refinement against the primary channel of
@@ -811,7 +843,51 @@ def run_refinement(
     ``refine --real`` — is called once after the sample is finalized with
     ``{refinement_run_id, n_episodes, estimated_cost_usd, video_ids}``; if it
     returns falsy, the run is left ``pending`` and no LLM call is made.
+    ``run_id`` — a row pre-allocated by ``allocate_refinement_run`` (the async
+    review-UI path): the run updates that row instead of inserting one, and any
+    failure (including before stage 3) flips it to ``status='error'`` so a
+    polling client never sees it dangle in ``pending``.
     """
+    try:
+        return _run_refinement_impl(
+            db_path,
+            project_name=project_name,
+            discovery_run_id=discovery_run_id,
+            llm=llm,
+            sample=sample,
+            transcript_fetcher=transcript_fetcher,
+            sample_size=sample_size,
+            model=model,
+            confirm=confirm,
+            run_id=run_id,
+            out=out,
+        )
+    except Exception as exc:
+        if run_id is not None:
+            try:
+                with connect(db_path) as connection:
+                    ensure_schema(connection)
+                    db.set_refinement_run_error(connection, run_id, str(exc))
+                    connection.commit()
+            except Exception:  # pragma: no cover - best-effort audit flip
+                pass
+        raise
+
+
+def _run_refinement_impl(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    discovery_run_id: int | None,
+    llm: LLMCallable,
+    sample: Sequence[str] | None,
+    transcript_fetcher: Callable[[str], Any] | None,
+    sample_size: int,
+    model: str,
+    confirm: Callable[[dict[str, Any]], bool] | None,
+    run_id: int | None,
+    out: Callable[[str], Any],
+) -> RefinementRun:
     # --- stage 1: resolve, pool, pick (read-only) ---
     with connect(db_path) as connection:
         ensure_schema(connection)
@@ -943,14 +1019,26 @@ def run_refinement(
             for video_id, youtube_id in survivors
         ]
 
-        run_id = db.create_refinement_run(
-            connection,
-            channel_id=channel_id,
-            discovery_run_id=discovery_run_id,
-            model=model,
-            prompt_version=REFINEMENT_PROMPT_VERSION,
-            n_sample=len(contexts),
-        )
+        if run_id is None:
+            run_id = db.create_refinement_run(
+                connection,
+                channel_id=channel_id,
+                discovery_run_id=discovery_run_id,
+                model=model,
+                prompt_version=REFINEMENT_PROMPT_VERSION,
+                n_sample=len(contexts),
+            )
+        else:
+            # A pre-allocated row (the async review-UI path) — fill in the
+            # details now that the sample is resolved.
+            connection.execute(
+                """
+                UPDATE refinement_runs
+                SET discovery_run_id = ?, model = ?, prompt_version = ?, n_sample = ?
+                WHERE id = ?
+                """,
+                (discovery_run_id, model, REFINEMENT_PROMPT_VERSION, len(contexts), run_id),
+            )
         db.add_refinement_episodes(
             connection,
             run_id,
@@ -1030,14 +1118,12 @@ def run_refinement(
             db.insert_taxonomy_proposals(connection, run_id, proposals)
             db.set_refinement_run_status(connection, run_id, "success")
             connection.commit()
-        except Exception:
+        except Exception as exc:
             connection.rollback()
             # The run + episodes rows were committed before the batch, so the
             # rollback only undoes any partial proposal / refine-assignment
             # writes; flip the surviving run row to 'error' for the audit log.
-            connection.execute(
-                "UPDATE refinement_runs SET status = 'error' WHERE id = ?", (run_id,)
-            )
+            db.set_refinement_run_error(connection, run_id, str(exc))
             connection.commit()
             raise
 
