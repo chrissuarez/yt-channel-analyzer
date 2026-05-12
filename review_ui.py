@@ -15,6 +15,7 @@ class _ThreadingWSGIServer(ThreadingMixIn, WSGIServer):
     daemon_threads = True
 
 from yt_channel_analyzer.db import (
+    accept_taxonomy_proposal,
     apply_subtopic_suggestion_to_video,
     apply_topic_suggestion_to_video,
     approve_comparison_group_suggestion_label,
@@ -30,6 +31,7 @@ from yt_channel_analyzer.db import (
     get_primary_channel,
     get_subtopic_suggestion_review_rows,
     get_topic_suggestion_review_rows,
+    list_pending_taxonomy_proposals,
     list_subtopic_suggestion_application_rows,
     list_approved_comparison_groups_for_subtopic,
     list_approved_subtopics_for_topic,
@@ -44,6 +46,7 @@ from yt_channel_analyzer.db import (
     move_episode_subtopic,
     reject_comparison_group_suggestion_label,
     reject_subtopic_suggestion_label,
+    reject_taxonomy_proposal,
     reject_topic_suggestion_label,
     rename_comparison_group_suggestion_label,
     rename_subtopic_suggestion_label,
@@ -74,7 +77,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup-proposal-review"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -1984,6 +1987,38 @@ HTML_PAGE = """<!doctype html>
     }
     .refine-note.warn { color: var(--coral); }
     .refine-empty { color: var(--ink-soft); padding: 24px 0; }
+    .refine-proposals { margin-top: 32px; border-top: 1px solid var(--rule); padding-top: 20px; }
+    .refine-proposals > h2 { font-size: 18px; margin: 0 0 4px; }
+    .refine-prop-run > h3 {
+      font-family: var(--mono); font-size: 12px; color: var(--ink-mute);
+      text-transform: uppercase; letter-spacing: 0.08em; margin: 18px 0 8px;
+    }
+    .refine-prop-card {
+      border: 1px solid var(--rule); border-radius: 8px;
+      padding: 12px 14px; margin-bottom: 10px;
+    }
+    .refine-prop-head { font-size: 14px; }
+    .refine-prop-kind {
+      font-family: var(--mono); font-size: 11px; padding: 1px 6px;
+      border-radius: 4px; background: var(--rule); color: var(--ink-soft);
+      text-transform: uppercase; letter-spacing: 0.06em; margin-right: 6px;
+    }
+    .refine-prop-kind.subtopic { background: rgba(15, 118, 110, 0.12); color: var(--teal); }
+    .refine-prop-ev {
+      font-size: 13px; color: var(--ink-soft); margin: 6px 0;
+      border-left: 2px solid var(--rule); padding-left: 10px;
+    }
+    .refine-prop-src { font-size: 12px; color: var(--ink-mute); margin-bottom: 8px; }
+    .refine-prop-actions { display: flex; gap: 8px; }
+    .refine-nudge {
+      margin-top: 16px; padding: 12px 14px; border-radius: 8px;
+      background: rgba(15, 118, 110, 0.08); font-size: 13px; color: var(--ink-soft);
+    }
+    .discovery-episode-checked {
+      font-family: var(--mono); font-size: 10px; padding: 1px 5px;
+      border-radius: 4px; background: rgba(15, 118, 110, 0.14); color: var(--teal);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
 
     /* ---------- Consume stage ---------- */
     .consume-wrap {
@@ -2604,6 +2639,7 @@ HTML_PAGE = """<!doctype html>
         mode: 'real',
         running: false,
         runResult: null,       // {refinement_run_id, status, n_proposals, error}
+        acceptedThisSession: 0, // proposals accepted since page load (drives the re-run-discovery nudge)
       },
     };
 
@@ -3252,6 +3288,9 @@ HTML_PAGE = """<!doctype html>
       const alsoInHtml = alsoIn.length
         ? `<span class="discovery-episode-also-in">also in: ${alsoIn.map((name) => escapeHtml(name)).join(', ')}</span>`
         : '';
+      const checkedHtml = episode.assignment_source === 'refine'
+        ? '<span class="discovery-episode-checked" title="Re-judged from the full transcript">transcript-checked</span>'
+        : '';
       const watchUrl = episode.youtube_video_id
         ? `https://www.youtube.com/watch?v=${encodeURIComponent(episode.youtube_video_id)}`
         : null;
@@ -3277,6 +3316,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">conf ${escapeHtml(pct)}</span>
+              ${checkedHtml}
               ${publishedHtml}
               ${durationHtml}
               <span>${escapeHtml(episode.youtube_video_id || '')}</span>
@@ -3348,6 +3388,9 @@ HTML_PAGE = """<!doctype html>
       const alsoInHtml = alsoIn.length
         ? `<span class="discovery-episode-also-in">also in: ${alsoIn.map((name) => escapeHtml(name)).join(', ')}</span>`
         : '';
+      const checkedHtml = episode.assignment_source === 'refine'
+        ? '<span class="discovery-episode-checked" title="Re-judged from the full transcript">transcript-checked</span>'
+        : '';
       const publishedHtml = episode.published_at
         ? `<span class="muted">${escapeHtml(formatDate(episode.published_at))}</span>`
         : '';
@@ -3360,6 +3403,7 @@ HTML_PAGE = """<!doctype html>
             <div class="discovery-episode-title">${escapeHtml(episode.title || '(untitled)')}</div>
             <div class="discovery-episode-meta">
               <span class="discovery-episode-confidence">${escapeHtml(pct)}</span>
+              ${checkedHtml}
               ${publishedHtml}
               ${durationHtml}
               <span class="muted">${escapeHtml(episode.youtube_video_id || '')}</span>
@@ -4414,15 +4458,16 @@ HTML_PAGE = """<!doctype html>
       const host = document.getElementById('refine-setup');
       if (!host) return;
       const r = state.refine;
-      if (r.loading) { host.innerHTML = '<p class="refine-empty">Loading the auto-picked sample…</p>'; return; }
+      const proposalsHtml = renderRefineProposals();
+      if (r.loading) { host.innerHTML = '<p class="refine-empty">Loading the auto-picked sample…</p>' + proposalsHtml; return; }
       if (r.error) {
         const hint = /discover/i.test(r.error)
           ? ' <button class="secondary" onclick="setActiveStage(\\'discover\\')">Go to Discover →</button>'
           : '';
-        host.innerHTML = `<p class="refine-note warn">${escapeHtml(r.error)}</p><p>${hint}</p>`;
+        host.innerHTML = `<p class="refine-note warn">${escapeHtml(r.error)}</p><p>${hint}</p>` + proposalsHtml;
         return;
       }
-      if (!r.loaded) { host.innerHTML = '<p class="refine-empty">Open this stage to load the sample.</p>'; return; }
+      if (!r.loaded) { host.innerHTML = '<p class="refine-empty">Open this stage to load the sample.</p>' + proposalsHtml; return; }
       const eps = r.episodes;
       const realOn = r.mode === 'real';
       const estLabel = r.estimate ? `$${Number(r.estimate.estimated_cost_usd || 0).toFixed(4)}` : '—';
@@ -4440,7 +4485,7 @@ HTML_PAGE = """<!doctype html>
       const runResultHtml = r.runResult ? (
         r.runResult.status === 'error'
           ? `<p class="refine-note warn">Run #${r.runResult.refinement_run_id} errored: ${escapeHtml(r.runResult.error || '')}</p>`
-          : `<p class="refine-note">Run #${r.runResult.refinement_run_id} complete — ${escapeHtml(r.runResult.n_proposals)} taxonomy proposal(s). The proposal-review screen lands in the next slice (B6); until then accept/reject from the CLI.</p>`
+          : `<p class="refine-note">Run #${r.runResult.refinement_run_id} complete — ${escapeHtml(r.runResult.n_proposals)} taxonomy proposal(s). Review them below.</p>`
       ) : '';
       host.innerHTML = `
         <div class="refine-meta">
@@ -4466,7 +4511,79 @@ HTML_PAGE = """<!doctype html>
           <button class="discover-run-action" onclick="refineRun()" ${canRun ? '' : 'disabled'}>Run refinement (${estLabel})</button>
         </div>
         ${runResultHtml}
+        ${proposalsHtml}
       `;
+    }
+
+    function renderRefineProposals() {
+      const proposals = (state.payload && state.payload.refine_proposals) || [];
+      const accepted = state.refine.acceptedThisSession || 0;
+      if (!proposals.length && !accepted) return '';
+      const byRun = new Map();
+      proposals.forEach((p) => {
+        if (!byRun.has(p.refinement_run_id)) byRun.set(p.refinement_run_id, []);
+        byRun.get(p.refinement_run_id).push(p);
+      });
+      const runIds = Array.from(byRun.keys()).sort((a, b) => b - a);
+      const groupsHtml = runIds.map((rid) => {
+        const items = byRun.get(rid);
+        const subs = items.filter((p) => p.kind === 'subtopic');
+        const tops = items.filter((p) => p.kind !== 'subtopic');
+        const cards = subs.concat(tops).map(renderProposalCard).join('');
+        return `<div class="refine-prop-run"><h3>Refinement run #${escapeHtml(rid)} · ${items.length} proposal(s)</h3>${cards}</div>`;
+      }).join('');
+      const bodyHtml = proposals.length ? groupsHtml : '<p class="refine-empty">No pending proposals — all reviewed.</p>';
+      const nudgeHtml = accepted
+        ? `<div class="refine-nudge">Accepted ${accepted} change(s) this session. <button class="secondary" onclick="setActiveStage(\\'discover\\')">Re-run Discover →</button> to spread them across the channel.</div>`
+        : '';
+      return `<div class="refine-proposals"><h2>Taxonomy proposals</h2><p class="muted small">Accept to create the real topic/subtopic node (parent resolved through renames). Then re-run Discover to spread it channel-wide.</p>${bodyHtml}${nudgeHtml}</div>`;
+    }
+
+    function renderProposalCard(p) {
+      const watchUrl = p.source_youtube_video_id
+        ? `https://www.youtube.com/watch?v=${encodeURIComponent(p.source_youtube_video_id)}`
+        : null;
+      const srcHtml = watchUrl
+        ? `<a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener">${escapeHtml(p.source_title || p.source_youtube_video_id)}</a>`
+        : '<span class="soft">(source episode unknown)</span>';
+      const parentHtml = p.kind === 'subtopic'
+        ? ` <span class="soft">under</span> <strong>${escapeHtml(p.parent_topic_name || '?')}</strong>`
+        : '';
+      const evHtml = p.evidence ? `<div class="refine-prop-ev">${escapeHtml(p.evidence)}</div>` : '';
+      return `<div class="refine-prop-card">
+        <div class="refine-prop-head"><span class="refine-prop-kind ${escapeHtml(p.kind)}">${escapeHtml(p.kind)}</span><strong>${escapeHtml(p.name)}</strong>${parentHtml}</div>
+        ${evHtml}
+        <div class="refine-prop-src">from ${srcHtml}</div>
+        <div class="refine-prop-actions">
+          <button class="discover-run-action" onclick="acceptProposal(${p.proposal_id})">Accept</button>
+          <button class="secondary" onclick="rejectProposal(${p.proposal_id})">Reject</button>
+        </div>
+      </div>`;
+    }
+
+    async function acceptProposal(proposalId) {
+      try {
+        const res = await postJson('/api/refine/proposal/accept', { proposal_id: proposalId });
+        if (res.result && res.result.status === 'rejected') {
+          setStatus(res.message || `Proposal ${proposalId} could not be accepted — marked rejected.`, true);
+        } else {
+          state.refine.acceptedThisSession = (state.refine.acceptedThisSession || 0) + 1;
+          setStatus(res.message || `Accepted proposal ${proposalId}.`);
+        }
+        await fetchState();
+      } catch (error) {
+        setStatus(error.message || 'Accept failed.', true);
+      }
+    }
+
+    async function rejectProposal(proposalId) {
+      try {
+        const res = await postJson('/api/refine/proposal/reject', { proposal_id: proposalId });
+        setStatus(res.message || `Rejected proposal ${proposalId}.`);
+        await fetchState();
+      } catch (error) {
+        setStatus(error.message || 'Reject failed.', true);
+      }
     }
 
     function renderConsume(payload) {
@@ -5556,6 +5673,14 @@ def _build_discovery_topic_map(
     }
 
 
+def _build_refine_proposals(db_path: Path, project_id: int) -> list[dict[str, Any]]:
+    """All pending ``taxonomy_proposals`` for the project's refinement runs,
+    shaped for the Refine-stage proposal-review screen."""
+    with connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        return list_pending_taxonomy_proposals(connection, project_id)
+
+
 def build_state_payload(
     db_path: str | Path,
     *,
@@ -5773,11 +5898,15 @@ def build_state_payload(
         supply_channel: dict[str, Any] | None = None
         supply_videos: list[dict[str, Any]] = []
         discover_runs: list[dict[str, Any]] = []
+        refine_proposals: list[dict[str, Any]] = []
     else:
         channel_overview = _build_channel_overview(
             db_path,
             project_id=primary_channel.project_id,
             channel_id=primary_channel.channel_id,
+        )
+        refine_proposals = _build_refine_proposals(
+            db_path, primary_channel.project_id
         )
         supply_channel = _build_supply_channel(
             db_path, channel_id=primary_channel.channel_id
@@ -5808,6 +5937,7 @@ def build_state_payload(
         "supply_limit": effective_supply_limit,
         "supply_max_limit": SUPPLY_MAX_LIMIT,
         "discover_runs": discover_runs,
+        "refine_proposals": refine_proposals,
         "latest_subtopic_run_id_by_topic": latest_subtopic_run_id_by_topic,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),
@@ -6078,6 +6208,10 @@ class ReviewUIApp:
             return self._refine_fetch_transcripts(body)
         if path == "/api/refine":
             return self._refine_run(body)
+        if path == "/api/refine/proposal/accept":
+            return self._refine_proposal_resolve(body, accept=True)
+        if path == "/api/refine/proposal/reject":
+            return self._refine_proposal_resolve(body, accept=False)
         if path == "/api/channel/edit":
             return self._channel_edit(body)
         run_id_raw = body.get("run_id")
@@ -6922,6 +7056,45 @@ class ReviewUIApp:
         if row["error_message"] is not None:
             result["error"] = row["error_message"]
         return result
+
+    def _refine_proposal_resolve(
+        self, body: dict[str, Any], *, accept: bool
+    ) -> dict[str, Any]:
+        """``POST /api/refine/proposal/{accept,reject}`` — body ``{proposal_id}``.
+
+        Accept creates the real ``topics``/``subtopics`` node (parent resolved
+        through the rename log; idempotent); a missing parent is reported back as
+        a rejection. Reject just marks the proposal row.
+        """
+        raw = body.get("proposal_id")
+        try:
+            proposal_id = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ReviewUIError("missing or invalid field: proposal_id") from exc
+        with connect(self.db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            if accept:
+                result = accept_taxonomy_proposal(connection, proposal_id)
+            else:
+                result = reject_taxonomy_proposal(connection, proposal_id)
+            connection.commit()
+        if not accept:
+            msg = f"Rejected proposal {proposal_id}."
+        elif result.get("status") == "rejected":
+            parent = result.get("parent_topic_name")
+            msg = (
+                f"Proposal {proposal_id} ({result.get('kind')} "
+                f"'{result.get('name')}') could not be accepted — parent topic "
+                f"'{parent}' no longer exists. Marked rejected."
+            )
+        elif result.get("kind") == "subtopic":
+            msg = (
+                f"Accepted subtopic '{result.get('name')}' under "
+                f"'{result.get('parent_topic_name')}'. Re-run Discover to spread it."
+            )
+        else:
+            msg = f"Accepted topic '{result.get('name')}'. Re-run Discover to spread it."
+        return {"ok": True, "result": result, "message": msg}
 
     def _read_json_body(self, environ: dict[str, Any]) -> dict[str, Any]:
         length_raw = environ.get("CONTENT_LENGTH") or "0"

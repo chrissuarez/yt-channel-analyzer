@@ -8193,5 +8193,194 @@ class RefineStageHTMLTests(unittest.TestCase):
         self.assertIn("discovery", UI_REVISION)
 
 
+class RefineProposalReviewTests(unittest.TestCase):
+    def _call_app(
+        self, app, method: str, path: str, body: dict | None = None
+    ) -> tuple[str, str]:
+        raw = json.dumps(body or {}).encode("utf-8")
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(raw)),
+            "wsgi.input": io.BytesIO(raw),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _app(self, db_path: Path):
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+        from yt_channel_analyzer.youtube import stub_transcript_fetcher
+
+        return ReviewUIApp(
+            db_path,
+            transcript_fetcher=stub_transcript_fetcher,
+            transcript_fetch_request_interval=0.0,
+            run_in_background=False,
+        )
+
+    def _seed_with_proposals(self, db_path: Path):
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+        app = self._app(db_path)
+        status, _ = self._call_app(app, "POST", "/api/refine", {"mode": "stub"})
+        self.assertEqual(status, "200 OK")
+        return app
+
+    def _state(self, app):
+        status, body = self._call_app(app, "GET", "/api/state")
+        self.assertEqual(status, "200 OK")
+        return json.loads(body)
+
+    def test_payload_lists_pending_proposals_newest_run_first(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            props = self._state(app)["refine_proposals"]
+            self.assertEqual(len(props), 3)
+            self.assertEqual(sorted(p["kind"] for p in props), ["subtopic", "subtopic", "topic"])
+            for proposal in props:
+                self.assertEqual(proposal["refinement_run_id"], 1)
+                self.assertIn(proposal["source_youtube_video_id"], {"vid1", "vid2"})
+            # subtopics are listed before topics within a run group
+            self.assertEqual(props[0]["kind"], "subtopic")
+            self.assertEqual(props[-1]["kind"], "topic")
+            status, _ = self._call_app(app, "POST", "/api/refine", {"mode": "stub"})
+            self.assertEqual(status, "200 OK")
+            props2 = self._state(app)["refine_proposals"]
+            self.assertEqual(props2[0]["refinement_run_id"], 2)
+            self.assertTrue(any(p["refinement_run_id"] == 1 for p in props2))
+
+    def test_accept_subtopic_creates_node_and_marks_accepted(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            sub = next(
+                p for p in self._state(app)["refine_proposals"]
+                if p["kind"] == "subtopic" and p["parent_topic_name"] == "Health"
+            )
+            status, body = self._call_app(
+                app, "POST", "/api/refine/proposal/accept", {"proposal_id": sub["proposal_id"]}
+            )
+            self.assertEqual(status, "200 OK")
+            result = json.loads(body)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["result"]["status"], "accepted")
+            from yt_channel_analyzer.db import connect
+
+            with connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT s.name FROM subtopics s JOIN topics t ON t.id = s.topic_id "
+                    "WHERE t.name = 'Health' AND s.name = ?",
+                    (sub["name"],),
+                ).fetchone()
+            self.assertIsNotNone(row)
+            remaining = [p["proposal_id"] for p in self._state(app)["refine_proposals"]]
+            self.assertNotIn(sub["proposal_id"], remaining)
+
+    def test_accept_topic_creates_topic(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            top = next(p for p in self._state(app)["refine_proposals"] if p["kind"] == "topic")
+            status, body = self._call_app(
+                app, "POST", "/api/refine/proposal/accept", {"proposal_id": top["proposal_id"]}
+            )
+            self.assertEqual(status, "200 OK")
+            self.assertEqual(json.loads(body)["result"]["status"], "accepted")
+            from yt_channel_analyzer.db import connect
+
+            with connect(db_path) as conn:
+                row = conn.execute(
+                    "SELECT id FROM topics WHERE name = ?", (top["name"],)
+                ).fetchone()
+            self.assertIsNotNone(row)
+
+    def test_reject_marks_rejected_and_drops_from_payload(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            target = self._state(app)["refine_proposals"][0]
+            status, body = self._call_app(
+                app, "POST", "/api/refine/proposal/reject", {"proposal_id": target["proposal_id"]}
+            )
+            self.assertEqual(status, "200 OK")
+            self.assertEqual(json.loads(body)["result"]["status"], "rejected")
+            remaining = [p["proposal_id"] for p in self._state(app)["refine_proposals"]]
+            self.assertNotIn(target["proposal_id"], remaining)
+
+    def test_accept_subtopic_with_missing_parent_reports_rejection(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            from yt_channel_analyzer.db import connect, insert_taxonomy_proposals
+
+            with connect(db_path) as conn:
+                (pid,) = insert_taxonomy_proposals(
+                    conn,
+                    1,
+                    [{"kind": "subtopic", "name": "Ghost", "parent_topic_name": "Nonexistent", "evidence": "x"}],
+                )
+                conn.commit()
+            status, body = self._call_app(
+                app, "POST", "/api/refine/proposal/accept", {"proposal_id": pid}
+            )
+            self.assertEqual(status, "200 OK")
+            result = json.loads(body)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["result"]["status"], "rejected")
+            self.assertIn("Nonexistent", result["message"])
+
+    def test_accept_invalid_proposal_id_is_400(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            status, _ = self._call_app(
+                app, "POST", "/api/refine/proposal/accept", {"proposal_id": 99999}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            status, body = self._call_app(app, "POST", "/api/refine/proposal/accept", {})
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("proposal_id", json.loads(body)["error"])
+
+    def test_html_wires_proposal_review_and_transcript_checked_pill(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("function renderRefineProposals", html)
+        self.assertIn("/api/refine/proposal/accept", html)
+        self.assertIn("/api/refine/proposal/reject", html)
+        self.assertIn("refine_proposals", html)
+        self.assertIn("discovery-episode-checked", html)
+        self.assertIn("assignment_source === 'refine'", html)
+
+
 if __name__ == "__main__":
     unittest.main()

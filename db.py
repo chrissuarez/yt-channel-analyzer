@@ -5835,6 +5835,56 @@ def accept_taxonomy_proposal(
     }
 
 
+def list_pending_taxonomy_proposals(
+    connection: sqlite3.Connection, project_id: int
+) -> list[dict[str, Any]]:
+    """All ``status='pending'`` taxonomy proposals for the project's refinement
+    runs — newest run first, then subtopics before topics, then name. Each row
+    carries the source episode's youtube id + title so the review card can link
+    it. ``connection.row_factory`` must be :class:`sqlite3.Row`."""
+    rows = connection.execute(
+        """
+        SELECT tp.id AS proposal_id,
+               tp.refinement_run_id AS refinement_run_id,
+               tp.kind AS kind,
+               tp.name AS name,
+               tp.parent_topic_name AS parent_topic_name,
+               tp.evidence AS evidence,
+               tp.source_video_id AS source_video_id,
+               tp.created_at AS created_at,
+               v.youtube_video_id AS source_youtube_video_id,
+               v.title AS source_title
+        FROM taxonomy_proposals tp
+        JOIN refinement_runs rr ON rr.id = tp.refinement_run_id
+        JOIN channels ch ON ch.id = rr.channel_id
+        LEFT JOIN videos v ON v.id = tp.source_video_id
+        WHERE ch.project_id = ? AND tp.status = 'pending'
+        ORDER BY tp.refinement_run_id DESC,
+                 CASE tp.kind WHEN 'subtopic' THEN 0 ELSE 1 END,
+                 tp.parent_topic_name COLLATE NOCASE,
+                 tp.name COLLATE NOCASE
+        """,
+        (project_id,),
+    ).fetchall()
+    return [
+        {
+            "proposal_id": int(r["proposal_id"]),
+            "refinement_run_id": int(r["refinement_run_id"]),
+            "kind": r["kind"],
+            "name": r["name"],
+            "parent_topic_name": r["parent_topic_name"],
+            "evidence": r["evidence"],
+            "source_video_id": (
+                int(r["source_video_id"]) if r["source_video_id"] is not None else None
+            ),
+            "source_youtube_video_id": r["source_youtube_video_id"],
+            "source_title": r["source_title"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
+
+
 def reject_taxonomy_proposal(
     connection: sqlite3.Connection, proposal_id: int
 ) -> dict[str, Any]:
