@@ -421,15 +421,20 @@ class RefinementRunHelperTests(unittest.TestCase):
                 ).fetchone()
                 self.assertEqual(sub_row, ("refine", run_id))
 
-                # Unknown topic in a refine assignment is a hard error.
-                with self.assertRaises(ValueError):
-                    db.write_refine_assignments(
-                        conn,
-                        channel_id=ids["channel_id"],
-                        refinement_run_id=run_id,
-                        video_id=ids["video_id"],
-                        assignments=[{"topic_name": "Never Heard Of It"}],
-                    )
+                # An unknown topic in a refine assignment is skipped (counted),
+                # not a hard error — one hallucinated topic must not sink a paid batch.
+                skip_summary = db.write_refine_assignments(
+                    conn,
+                    channel_id=ids["channel_id"],
+                    refinement_run_id=run_id,
+                    video_id=ids["video_id"],
+                    assignments=[
+                        {"topic_name": "Never Heard Of It", "confidence": 0.9, "reason": "x"},
+                        {"topic_name": "Affirmed Topic", "confidence": 0.8, "reason": "y"},
+                    ],
+                )
+                self.assertEqual(skip_summary["skipped_unknown_topic"], 1)
+                self.assertEqual(skip_summary["topics_written"], 1)
                 conn.rollback()
 
 

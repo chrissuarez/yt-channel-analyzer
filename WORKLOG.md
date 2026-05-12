@@ -27,6 +27,23 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — C: real DOAC pass through Phase B (paid ~$0.75) + 2 robustness fixes
+
+### Done
+- Ran the Phase B operator smoke (`.scratch/phase-b-refinement/SMOKE.md`) end-to-end on a fresh `tmp/doac-smoke.sqlite` (copied `doac-sticky` → wiped discovery/refine/curation state + stub transcripts; 1 channel, 53 videos). `discover --real` (run 1: 37/53 shorts excluded ✓, 7 topics, ~16 eligible eps) → `refine --real` fetched 15 real DOAC transcripts inline (all `available`) → `refine` run 1 `success`: 15 eps, 25 topic + 51 subtopic proposals, 95 refine assignments; cost est ~$0.23 vs actual ~$0.22 ✓ → scripted accept/reject via `db.accept_taxonomy_proposal`/`reject_taxonomy_proposal`: accept topic → node created; accept subtopic w/ valid parent → created; accept subtopic whose parent doesn't exist (#4 `Geopolitics & Global Power`, a near-miss of the real `…& Global Conflict`) → auto-`rejected` `parent_topic_missing` ✓; reject #52 → `rejected` ✓. `refinement_episodes.assignments_before_json` present for all 15 (metadata-derived "before"); refine `reason`s read transcript-grade ("Extended discussion of AI's impact on employment, job replacement timelines…") not title-grade. `discover --real` re-run (run 2): refine bucket **unchanged** (37 topic + 44 subtopic `refine` rows) — no downgrade ✓; spread to non-sampled eps ~nil (only ~1 of the channel's ~16 non-short eps was outside the sample — dataset artifact, not a code issue).
+
+### Learned / fixed
+- **Bug 1 — strict schema rejects `"subtopic": null`.** Haiku emits `"subtopic": null` in a refine assignment instead of omitting the key; the optional-`subtopic` schema entry only allowed `string`, so `extractor/runner._parse` → `schema.validate` raised `SchemaValidationError: $.assignments[1].subtopic: expected string, got NoneType` and discarded the whole (paid) batch. Fix: `extractor/schema.py` now treats an explicit-`null` value for a property **not** in `required` as if the key were absent. 4 new tests in `test_extractor.py`.
+- **Bug 2 — one hallucinated topic name sinks the whole batch.** Despite the prompt forbidding it, the model occasionally puts an invented/paraphrased topic in `assignments` (`'Geopolitics & Global Power'`); `db.write_refine_assignments` raised `ValueError: refine assignment references unknown topic` and the whole 15-episode run errored out (after the ~$0.22 spend). Fix: that assignment is now skipped + counted (`skipped_unknown_topic` in the returned summary); a genuinely new theme is usually also raised under `new_topic_proposals`. Added prompt nudge ("omit `subtopic` — do not send `null`"). Updated the now-stale hard-error test in `test_refinement_schema.py`. Gate 373 green.
+- **Quality note (not a bug):** the refinement prompt is very eager to propose new topics — 25 new-`topic` proposals from 15 episodes. A near-miss like `Geopolitics & Global Power` vs the existing `Geopolitics & Global Conflict` shows the model isn't anchoring tightly on the supplied taxonomy. Future tuning candidates: tell the model when its proposed name collides with an existing topic; and/or have `refinement.py` re-route an unknown-topic assignment into `new_topic_proposals` rather than dropping it.
+- Total real spend this session ≈ $0.75 (discover ×2 ≈ $0.08; refine ×3 ≈ $0.66 — runs 1 & 2 each burned a ~$0.22 batch before crashing on the two bugs). `doac-smoke.sqlite` retains `llm_calls` only from surviving runs (~$0.30); failed-run rows were cleared during resets.
+
+### Next
+- Commit the two fixes + this log. Optionally eyeball the proposal-review / before→after panels in the UI against `tmp/doac-smoke.sqlite` (`serve-review-ui --db-path ./tmp/doac-smoke.sqlite`) — the data path is test-verified; only the visual layout is unconfirmed.
+- Then: scope Phase C (claim extraction / embeddings / clustering / synthesis).
+
+---
+
 ## 2026-05-12 — A: shorts-visibility UI tweaks (`review_ui.py`, no spend)
 
 ### Done

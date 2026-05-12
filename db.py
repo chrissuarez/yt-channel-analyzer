@@ -6060,6 +6060,7 @@ def write_refine_assignments(
     topics_written = 0
     subtopics_written = 0
     suppressed = 0
+    skipped_unknown_topic = 0
     for assignment in assignments:
         topic_name = resolve(assignment["topic_name"])
         topic_row = connection.execute(
@@ -6067,9 +6068,12 @@ def write_refine_assignments(
             (project_id, topic_name),
         ).fetchone()
         if topic_row is None:
-            raise ValueError(
-                f"refine assignment references unknown topic: {topic_name!r}"
-            )
+            # The model occasionally invents a topic in `assignments` despite the
+            # prompt forbidding it; drop that one assignment rather than failing
+            # the whole (paid) batch. A genuinely new theme is usually also raised
+            # under new_topic_proposals, where the operator can promote it.
+            skipped_unknown_topic += 1
+            continue
         topic_id = int(topic_row[0])
         if topic_id in wrong_topic_ids:
             suppressed += 1
@@ -6120,4 +6124,5 @@ def write_refine_assignments(
         "topics_written": topics_written,
         "subtopics_written": subtopics_written,
         "suppressed": suppressed,
+        "skipped_unknown_topic": skipped_unknown_topic,
     }

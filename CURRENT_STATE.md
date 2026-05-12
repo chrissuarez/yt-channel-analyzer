@@ -60,12 +60,12 @@ The strategy is **retrofit in place**, not greenfield — most of the existing ~
 
 ## Current build focus
 
-Phase A and Phase B are both shipped. Phase A is validated on real DOAC data; **Phase B is code-complete (gate 369 green) but not yet exercised against real DOAC data.** The **shorts filter** feature is complete (3/3 slices merged 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length).
+Phase A and Phase B are both shipped **and both validated on real DOAC data** (Phase B smoke 2026-05-12, gate 373 green). The **shorts filter** feature is complete (3/3 slices merged 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length).
 
-**Next moves (agreed 2026-05-12 — do A, then C):**
-1. ~~**A — shorts-visibility UI tweaks**~~ ✅ **done 2026-05-12** (`review_ui.py`, no spend). Run-row shorts badge (`_build_discovery_topic_map` → `shorts_filter_badge`) always renders now with 4 states (filter on + N excluded / filter on + 0 / filter off / run predates filter); per-episode coral "Short · m:ss" pill on episode cards in the Review drill-down. `test_discovery.py` badge tests updated; gate green. See WORKLOG 2026-05-12.
-2. **C — real DOAC operator pass through Phase B** ← **next** — follow `.scratch/phase-b-refinement/SMOKE.md` on a **fresh throwaway DB** (not `tmp/doac-sticky.sqlite` — that's a deliberate 10-run stub+real curation stress fixture): `discover --real` (Shorts default on → clean run + badge shows) → Refine stage (sample → fetch transcripts → cost confirm ~$0.40/15 ep → run → proposal review + before→after → accept) → re-run `discover --real` to spread. Paid; `RALPH_ALLOW_REAL_LLM=1`. Only `--real` yields meaningful taxonomy proposals (the stub emits "Stub subtopic (General)" placeholders).
-3. **Scope Phase C** — claim extraction / embeddings / clustering / synthesis. No PRD or slice breakdown yet. ~$8 one-time backlog spend. Live with A+C results first.
+**Next moves (agreed 2026-05-12 — A & C done; next is Phase C scoping):**
+1. ~~**A — shorts-visibility UI tweaks**~~ ✅ **done 2026-05-12** (`review_ui.py`). Run-row shorts badge always renders (4 states); per-episode coral "Short · m:ss" pill on episode cards. See WORKLOG.
+2. ~~**C — real DOAC operator pass through Phase B**~~ ✅ **done 2026-05-12** on fresh `tmp/doac-smoke.sqlite` per `.scratch/phase-b-refinement/SMOKE.md`. End-to-end works (discover --real → 15 real transcripts → refine --real success: 76 proposals, 95 refine assignments, cost est ≈ actual → accept/reject incl. parent-missing auto-reject → before→after transcript-grade → re-discover doesn't downgrade refine rows). Surfaced & fixed **2 robustness bugs**: (a) `extractor/schema.py` treats `"k": null` for an optional prop as absent — Haiku emits `subtopic: null` and it was sinking the whole paid batch; (b) `db.write_refine_assignments` skips+counts (`skipped_unknown_topic`) an assignment naming a non-existent topic instead of `ValueError`-ing the whole run — Haiku occasionally hallucinates/paraphrases a topic name. Quality follow-up below (#3 in the polish list).
+3. **Scope Phase C** ← **next** — claim extraction / embeddings / clustering / synthesis. No PRD or slice breakdown yet. ~$8 one-time backlog spend.
 
 Smaller open threads still on the polish list:
 
@@ -73,6 +73,7 @@ Smaller open threads still on the polish list:
 
 1. **Haiku subtopic-divergence auto-recover** ($-affecting). Live smoke surfaced Haiku occasionally producing assignments that reference subtopics it didn't declare in `payload.subtopics`. Strict validator in `discovery.py` raises `ValueError`; user pays ~$0.05 per occurrence. Fix: auto-recover by appending the missing subtopic to `payload.subtopics` before strict validation.
 2. **Server-side Supply sort.** `supplySort='oldest'` is currently a client-side `.reverse()` of the loaded N — shows oldest *of loaded N*, not channel's true oldest. Push the ORDER BY toggle into `_build_supply_videos`.
+3. **Refinement prompt over-proposes / near-misses the taxonomy** (quality, surfaced by the 2026-05-12 DOAC smoke). 15 episodes → 25 new-`topic` proposals, and the model paraphrases existing topic names (`Geopolitics & Global Power` vs the real `Geopolitics & Global Conflict`). `db.write_refine_assignments` now safely *drops* an unknown-topic assignment (no crash) — but the better fix is to (a) tighten `_REFINEMENT_SYSTEM` to discourage near-duplicate topic proposals / surface the collision, and/or (b) have `refinement.py` re-route a dropped unknown-topic assignment into `new_topic_proposals` so the operator sees it instead of it vanishing.
 
 Beyond these, longer-tail items worth flagging when they bite:
 - Fuzzy-match fallback for sticky-curation chain (Haiku word-choice variance silently bypasses rename/wrong-mark when the LLM rephrases — e.g., "Personal Development & Success" → "Personal Development & Discipline" gets a new topic_id, escapes the exact-string-match curation chain).

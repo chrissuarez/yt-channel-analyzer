@@ -3,6 +3,9 @@
 Supports the subset of JSON Schema this project uses for structured outputs:
 - type: object | array | string | number | integer | boolean | null
 - required (object), properties, additionalProperties (bool)
+  (an optional property — one not listed in ``required`` — whose value is
+  explicit ``null`` is treated as absent: LLMs routinely emit ``"k": null``
+  instead of omitting the key, and the two should validate identically)
 - items (array), minItems, maxItems
 - minLength (string), minimum / maximum (number, integer)
 - enum
@@ -66,6 +69,9 @@ def validate(data: Any, schema: dict, path: str = "$") -> None:
         additional = schema.get("additionalProperties", True)
         for key, value in data.items():
             if key in properties:
+                # An optional property sent as explicit null == omitted.
+                if value is None and key not in required:
+                    continue
                 validate(value, properties[key], f"{path}.{key}")
             elif additional is False:
                 raise SchemaValidationError(f"{path}: unexpected key {key!r}")

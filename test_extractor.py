@@ -601,5 +601,37 @@ class SchemaMigrationTests(unittest.TestCase):
         )
 
 
+class SchemaNullOptionalTests(unittest.TestCase):
+    """An optional property sent as explicit ``null`` validates like an omitted key."""
+
+    SCHEMA: dict = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["topic"],
+        "properties": {
+            "topic": {"type": "string", "minLength": 1},
+            "subtopic": {"type": "string", "minLength": 1},
+        },
+    }
+
+    def test_null_optional_property_is_accepted(self) -> None:
+        from yt_channel_analyzer.extractor.schema import validate
+        validate({"topic": "T", "subtopic": None}, self.SCHEMA)  # no raise
+
+    def test_omitted_optional_property_is_accepted(self) -> None:
+        from yt_channel_analyzer.extractor.schema import validate
+        validate({"topic": "T"}, self.SCHEMA)  # no raise
+
+    def test_null_required_property_still_rejected(self) -> None:
+        from yt_channel_analyzer.extractor.schema import validate
+        with self.assertRaises(SchemaValidationError):
+            validate({"topic": None}, self.SCHEMA)
+
+    def test_present_optional_property_still_validated(self) -> None:
+        from yt_channel_analyzer.extractor.schema import validate
+        with self.assertRaises(SchemaValidationError):
+            validate({"topic": "T", "subtopic": ""}, self.SCHEMA)
+
+
 if __name__ == "__main__":
     unittest.main()
