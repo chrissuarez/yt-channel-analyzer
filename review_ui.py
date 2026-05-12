@@ -5582,6 +5582,8 @@ class ReviewUIApp:
         channel_metadata_fetcher: Any = None,
         channel_videos_fetcher: Any = None,
         discover_runner: Any = None,
+        transcript_fetcher: Any = None,
+        transcript_fetch_request_interval: float = 1.0,
         run_in_background: bool = True,
     ) -> None:
         self.db_path = Path(db_path)
@@ -5589,6 +5591,11 @@ class ReviewUIApp:
         self._channel_metadata_fetcher = channel_metadata_fetcher or _real_fetch_channel_metadata
         self._channel_videos_fetcher = channel_videos_fetcher or _real_fetch_channel_videos
         self._discover_runner = discover_runner or _default_discover_runner
+        # Injectable transcript fetcher for the Refine-stage fetch endpoint
+        # (None → the real youtube-transcript-api fetcher inside
+        # ``run_fetch_transcripts``); tests pass ``stub_transcript_fetcher``.
+        self._transcript_fetcher = transcript_fetcher
+        self._transcript_fetch_request_interval = transcript_fetch_request_interval
         # ``run_in_background=True`` spawns a daemon thread per /api/discover
         # call so the request returns immediately with the pre-allocated
         # run id; the JS client polls /api/discovery_runs/<id> until terminal.
@@ -5668,6 +5675,8 @@ class ReviewUIApp:
             return self._reingest(body)
         if path == "/api/discover":
             return self._discover(body)
+        if path == "/api/refine/fetch-transcripts":
+            return self._refine_fetch_transcripts(body)
         if path == "/api/channel/edit":
             return self._channel_edit(body)
         run_id_raw = body.get("run_id")
@@ -6282,6 +6291,78 @@ class ReviewUIApp:
             )
         except ValueError as exc:
             raise ReviewUIError(str(exc)) from exc
+
+    def _refine_fetch_transcripts(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``POST /api/refine/fetch-transcripts`` — body ``{video_ids: [...]}``
+        (YouTube video ids, each must belong to the primary channel). Runs the
+        slice-B1 fetch path for each id, then returns the per-episode transcript
+        statuses, the ids that came back non-``available`` (the Refine screen
+        drops these from the sample), and the ``refine --real`` cost estimate
+        over the episodes whose transcript is now available."""
+        from yt_channel_analyzer import db as _db
+        from yt_channel_analyzer import refinement
+        from yt_channel_analyzer.cli import run_fetch_transcripts
+
+        raw_ids = body.get("video_ids") if isinstance(body, dict) else None
+        if not isinstance(raw_ids, list) or not raw_ids:
+            raise ReviewUIError(
+                "missing required field: video_ids (a non-empty list of YouTube video ids)"
+            )
+        requested: list[str] = []
+        for item in raw_ids:
+            text = _normalize_text(item) if isinstance(item, str) else None
+            if text is None:
+                raise ReviewUIError("video_ids entries must be non-empty strings")
+            if text not in requested:
+                requested.append(text)
+
+        channel_video_ids = {
+            row["youtube_video_id"]
+            for row in _db.list_primary_channel_transcript_status(self.db_path)
+        }
+        unknown = [vid for vid in requested if vid not in channel_video_ids]
+        if unknown:
+            raise ReviewUIError(
+                f"not videos of the primary channel: {', '.join(unknown)}"
+            )
+
+        run_fetch_transcripts(
+            self.db_path,
+            requested,
+            transcript_fetcher=self._transcript_fetcher,
+            request_interval=self._transcript_fetch_request_interval,
+            out=lambda *_args, **_kwargs: None,
+        )
+
+        status_by_id = {
+            row["youtube_video_id"]: row["transcript_status"]
+            for row in _db.list_primary_channel_transcript_status(self.db_path)
+        }
+        episodes: list[dict[str, Any]] = []
+        available_ids: list[str] = []
+        dropped: list[str] = []
+        for vid in requested:
+            status = status_by_id.get(vid)
+            available = status == "available"
+            episodes.append(
+                {
+                    "youtube_video_id": vid,
+                    "transcript_status": status,
+                    "available": available,
+                }
+            )
+            (available_ids if available else dropped).append(vid)
+
+        estimated_cost_usd = refinement.estimate_refinement_cost_usd(
+            self.db_path, youtube_video_ids=available_ids
+        )
+        return {
+            "ok": True,
+            "episodes": episodes,
+            "dropped": dropped,
+            "n_available": len(available_ids),
+            "estimated_cost_usd": estimated_cost_usd,
+        }
 
     def _discovery_run_status(self, run_id: int) -> dict[str, Any]:
         with connect(self.db_path) as connection:

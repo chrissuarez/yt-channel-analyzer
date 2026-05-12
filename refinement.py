@@ -47,6 +47,10 @@ from yt_channel_analyzer.youtube import fetch_video_transcript
 SHORTS_CUTOFF_SECONDS = 180
 
 STUB_MODEL = "stub"
+# The model a ``refine --real`` run uses (Haiku); cost estimates assume it.
+# Kept in sync with ``extractor.anthropic_runner.DEFAULT_MODEL`` by hand to
+# avoid importing the Anthropic SDK path just for a string.
+DEFAULT_REAL_MODEL = "claude-haiku-4-5-20251001"
 
 REFINEMENT_PROMPT_NAME = "refinement.transcript"
 REFINEMENT_PROMPT_VERSION = "refinement-v1"
@@ -747,6 +751,39 @@ def _estimate_cost_usd(
     tokens_out = _OUTPUT_TOKENS_PER_EPISODE * len(episodes)
     cost = estimate_cost(model, tokens_in, tokens_out, is_batch=len(episodes) >= 10)
     return cost if cost is not None else 0.0
+
+
+def estimate_refinement_cost_usd(
+    db_path: str | Path,
+    *,
+    youtube_video_ids: Sequence[str],
+    model: str = DEFAULT_REAL_MODEL,
+) -> float:
+    """Cost estimate (USD) for a ``refine --real`` run over the given episodes —
+    Σ per-transcript token estimate × the model's input price + a flat output
+    allowance per episode (the same arithmetic ``run_refinement``'s confirm
+    prompt uses). Read-only. Episodes whose stored transcript is not
+    ``'available'`` (or absent) contribute nothing — the picker drops them
+    before the LLM call. Unknown ``youtube_video_ids`` are ignored."""
+    if not youtube_video_ids:
+        return 0.0
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        connection.row_factory = sqlite3.Row
+        info = _transcript_info(connection, list(youtube_video_ids))
+    contexts: list[RefinementEpisodeContext] = []
+    for youtube_id in youtube_video_ids:
+        status, text = info.get(youtube_id, (None, None))
+        if status == "available":
+            contexts.append(
+                RefinementEpisodeContext(
+                    video_id=0,
+                    youtube_video_id=youtube_id,
+                    transcript_text=text or "",
+                    current_assignments=[],
+                )
+            )
+    return _estimate_cost_usd(model, contexts)
 
 
 # --------------------------------------------------------------------------

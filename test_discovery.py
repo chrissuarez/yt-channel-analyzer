@@ -7929,5 +7929,101 @@ class RefineSampleEndpointTests(unittest.TestCase):
             self.assertIn("discover", json.loads(body)["error"].lower())
 
 
+class RefineFetchTranscriptsEndpointTests(unittest.TestCase):
+    def _call_app(
+        self, app, method: str, path: str, body: dict | None = None
+    ) -> tuple[str, str]:
+        raw = json.dumps(body or {}).encode("utf-8")
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": str(len(raw)),
+            "wsgi.input": io.BytesIO(raw),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _app(self, db_path: Path, **kwargs):
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        return ReviewUIApp(db_path, transcript_fetch_request_interval=0.0, **kwargs)
+
+    def test_fetch_transcripts_updates_status_and_estimates_cost(self) -> None:
+        from yt_channel_analyzer.youtube import stub_transcript_fetcher
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = self._app(db_path, transcript_fetcher=stub_transcript_fetcher)
+            status, body = self._call_app(
+                app, "POST", "/api/refine/fetch-transcripts",
+                {"video_ids": ["vid1", "vid2", "vid1"]},
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertEqual(
+                {e["youtube_video_id"] for e in payload["episodes"]},
+                {"vid1", "vid2"},
+            )
+            self.assertTrue(all(e["available"] for e in payload["episodes"]))
+            self.assertEqual(payload["n_available"], 2)
+            self.assertEqual(payload["dropped"], [])
+            self.assertGreater(payload["estimated_cost_usd"], 0.0)
+
+    def test_fetch_transcripts_drops_unavailable_and_zero_cost(self) -> None:
+        from yt_channel_analyzer.youtube import TranscriptRecord
+
+        def dead_fetcher(video_id: str) -> TranscriptRecord:
+            return TranscriptRecord(
+                status="not_found", source=None, language_code=None, text=None
+            )
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = self._app(db_path, transcript_fetcher=dead_fetcher)
+            status, body = self._call_app(
+                app, "POST", "/api/refine/fetch-transcripts",
+                {"video_ids": ["vid1", "vid2"]},
+            )
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertFalse(any(e["available"] for e in payload["episodes"]))
+            self.assertEqual(payload["n_available"], 0)
+            self.assertEqual(sorted(payload["dropped"]), ["vid1", "vid2"])
+            self.assertEqual(payload["estimated_cost_usd"], 0.0)
+
+    def test_fetch_transcripts_rejects_foreign_video_id(self) -> None:
+        from yt_channel_analyzer.youtube import stub_transcript_fetcher
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = self._app(db_path, transcript_fetcher=stub_transcript_fetcher)
+            status, body = self._call_app(
+                app, "POST", "/api/refine/fetch-transcripts",
+                {"video_ids": ["vid1", "not-a-channel-video"]},
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("primary channel", json.loads(body)["error"])
+
+    def test_fetch_transcripts_requires_video_ids(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = self._app(db_path)
+            status, body = self._call_app(
+                app, "POST", "/api/refine/fetch-transcripts", {"video_ids": []}
+            )
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("video_ids", json.loads(body)["error"])
+
+
 if __name__ == "__main__":
     unittest.main()
