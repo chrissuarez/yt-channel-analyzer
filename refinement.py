@@ -467,14 +467,15 @@ def _pick(
     topic_members: dict[str, list[int]],
     topic_order: list[str],
     sample_size: int,
-) -> tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int], list[int]]:
     """Pick the sample: ~2/3 coverage slots filled by round-robin over topics
     (each topic's single highest-confidence unpicked member; every topic gets
     one before any gets two), the remainder filled by blind-spot slots (pool
     ordered by lowest assignment confidence, then the unassigned bucket).
 
-    Returns ``(picked_video_ids, remaining_pool_video_ids)`` — ``remaining`` is
-    the leftover pool in blind-spot order, used for the one replacement round.
+    Returns ``(coverage_video_ids, blindspot_video_ids, remaining_pool_video_ids)``
+    — the picked sample is ``coverage + blindspot``; ``remaining`` is the leftover
+    pool in blind-spot order, used for the one replacement round.
     """
     n_coverage = (sample_size * 2) // 3
     queues = {topic: list(topic_members.get(topic, [])) for topic in topic_order}
@@ -508,9 +509,8 @@ def _pick(
     remainder = max(sample_size - len(coverage), 0)
     blindspot = blind_ordered[:remainder]
     blindspot_set = set(blindspot)
-    picked = coverage + blindspot
     remaining = [vid for vid in blind_ordered if vid not in blindspot_set]
-    return picked, remaining
+    return coverage, blindspot, remaining
 
 
 def select_refinement_sample(
@@ -525,7 +525,118 @@ def select_refinement_sample(
     pool, topic_members, topic_order = _build_pool(
         connection, channel_id, discovery_run_id
     )
-    return _pick(pool, topic_members, topic_order, sample_size)
+    coverage, blindspot, remaining = _pick(
+        pool, topic_members, topic_order, sample_size
+    )
+    return coverage + blindspot, remaining
+
+
+def _resolve_discovery_run_id(
+    connection: sqlite3.Connection,
+    *,
+    channel_id: int,
+    discovery_run_id: int | None,
+    project_name: str,
+) -> int:
+    """Return ``discovery_run_id`` if it belongs to ``channel_id``; otherwise the
+    channel's latest discovery run. Raises ``ValueError`` if neither resolves."""
+    if discovery_run_id is None:
+        row = connection.execute(
+            "SELECT id FROM discovery_runs WHERE channel_id = ? ORDER BY id DESC LIMIT 1",
+            (channel_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(
+                f"no discovery run for project {project_name!r}; run `discover` first"
+            )
+        return int(row["id"])
+    row = connection.execute(
+        "SELECT id FROM discovery_runs WHERE id = ? AND channel_id = ?",
+        (discovery_run_id, channel_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"discovery run {discovery_run_id} not found for this channel")
+    return int(row["id"])
+
+
+def describe_refinement_sample(
+    db_path: str | Path,
+    *,
+    project_name: str,
+    discovery_run_id: int | None = None,
+    sample_size: int = 15,
+) -> dict[str, Any]:
+    """Read-only Refine-UI sample description (no side effects).
+
+    Runs the slice-B3 picker against ``discovery_run_id`` (or the channel's
+    latest run) and returns ``{discovery_run_id, pool_size, episodes}`` where each
+    episode is ``{video_id, youtube_video_id, title, topic, confidence,
+    transcript_status, slot_kind}`` (``slot_kind`` is ``'coverage'`` or
+    ``'blind_spot'``; ``topic``/``confidence`` are the episode's highest-confidence
+    assignment in that run, or ``None`` for the unassigned blind-spot bucket).
+    """
+    with connect(db_path) as connection:
+        ensure_schema(connection)
+        connection.row_factory = sqlite3.Row
+        _project_id, channel_id = _resolve_channel(connection, project_name)
+        run_id = _resolve_discovery_run_id(
+            connection,
+            channel_id=channel_id,
+            discovery_run_id=discovery_run_id,
+            project_name=project_name,
+        )
+        pool, topic_members, topic_order = _build_pool(connection, channel_id, run_id)
+        coverage, blindspot, _remaining = _pick(
+            pool, topic_members, topic_order, sample_size
+        )
+        coverage_set = set(coverage)
+        picked = coverage + blindspot
+        if not picked:
+            return {"discovery_run_id": run_id, "pool_size": len(pool), "episodes": []}
+        placeholders = ",".join("?" * len(picked))
+        meta = {
+            row["id"]: (row["youtube_video_id"], row["title"], row["transcript_status"])
+            for row in connection.execute(
+                f"""
+                SELECT v.id AS id, v.youtube_video_id AS youtube_video_id,
+                       v.title AS title, vtr.transcript_status AS transcript_status
+                FROM videos v
+                LEFT JOIN video_transcripts vtr ON vtr.video_id = v.id
+                WHERE v.id IN ({placeholders})
+                """,
+                picked,
+            ).fetchall()
+        }
+        topic_by_video: dict[int, tuple[str, float | None]] = {}
+        for row in connection.execute(
+            f"""
+            SELECT vt.video_id AS video_id, t.name AS topic, vt.confidence AS confidence
+            FROM video_topics vt
+            JOIN topics t ON t.id = vt.topic_id
+            WHERE vt.discovery_run_id = ? AND vt.video_id IN ({placeholders})
+            ORDER BY vt.confidence DESC, t.name
+            """,
+            [run_id, *picked],
+        ).fetchall():
+            topic_by_video.setdefault(row["video_id"], (row["topic"], row["confidence"]))
+        episodes: list[dict[str, Any]] = []
+        for video_id in picked:
+            youtube_video_id, title, transcript_status = meta.get(
+                video_id, (None, None, None)
+            )
+            topic, confidence = topic_by_video.get(video_id, (None, None))
+            episodes.append(
+                {
+                    "video_id": video_id,
+                    "youtube_video_id": youtube_video_id,
+                    "title": title,
+                    "topic": topic,
+                    "confidence": confidence,
+                    "transcript_status": transcript_status,
+                    "slot_kind": "coverage" if video_id in coverage_set else "blind_spot",
+                }
+            )
+    return {"discovery_run_id": run_id, "pool_size": len(pool), "episodes": episodes}
 
 
 # --------------------------------------------------------------------------
@@ -716,9 +827,10 @@ def run_refinement(
             pool, topic_members, topic_order = _build_pool(
                 connection, channel_id, discovery_run_id
             )
-            picked, remaining_pool = _pick(
+            coverage, blindspot, remaining_pool = _pick(
                 pool, topic_members, topic_order, sample_size
             )
+            picked = coverage + blindspot
             if not picked:
                 raise ValueError(
                     "no eligible episodes for refinement (all Shorts, no "

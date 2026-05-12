@@ -5642,6 +5642,17 @@ class ReviewUIApp:
                 return self._json_response(
                     start_response, self._discovery_run_status(run_id_int)
                 )
+            if method == "GET" and path == "/api/refine/sample":
+                query = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=False)
+                discovery_run_id_raw = _normalize_text(
+                    (query.get("discovery_run_id") or [None])[0]
+                )
+                discovery_run_id = (
+                    int(discovery_run_id_raw) if discovery_run_id_raw is not None else None
+                )
+                return self._json_response(
+                    start_response, self._refine_sample(discovery_run_id)
+                )
             if method == "POST" and path.startswith("/api/"):
                 body = self._read_json_body(environ)
                 payload = self._handle_post(path, body)
@@ -6256,6 +6267,21 @@ class ReviewUIApp:
                 file=sys.stderr,
                 flush=True,
             )
+
+    def _refine_sample(self, discovery_run_id: int | None) -> dict[str, Any]:
+        """``GET /api/refine/sample`` — the slice-B3 auto-picked sample for the
+        active channel's latest (or the given) discovery run. Read-only."""
+        from yt_channel_analyzer import refinement
+
+        project_name = _resolve_primary_project_name(self.db_path)
+        try:
+            return refinement.describe_refinement_sample(
+                self.db_path,
+                project_name=project_name,
+                discovery_run_id=discovery_run_id,
+            )
+        except ValueError as exc:
+            raise ReviewUIError(str(exc)) from exc
 
     def _discovery_run_status(self, run_id: int) -> dict[str, Any]:
         with connect(self.db_path) as connection:

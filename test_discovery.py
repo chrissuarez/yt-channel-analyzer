@@ -7854,5 +7854,80 @@ class DiscoveryNeverDowngradeRefineTests(unittest.TestCase):
             )
 
 
+class RefineSampleEndpointTests(unittest.TestCase):
+    def _call_app(self, app, method: str, path: str) -> tuple[str, str]:
+        environ = {
+            "REQUEST_METHOD": method,
+            "PATH_INFO": path,
+            "QUERY_STRING": "",
+            "CONTENT_LENGTH": "0",
+            "wsgi.input": io.BytesIO(b""),
+        }
+        captured: dict[str, object] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body_bytes = b"".join(app(environ, start_response))
+        return str(captured["status"]), body_bytes.decode("utf-8")
+
+    def _seed_run(self, db_path: Path) -> None:
+        _seed_channel_with_videos(db_path)
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=lambda videos: DiscoveryPayload(
+                topics=["Health", "Business"],
+                assignments=[
+                    DiscoveryAssignment(
+                        youtube_video_id="vid1",
+                        topic_name="Health",
+                        confidence=0.9,
+                        reason="title mentions sleep",
+                    ),
+                    DiscoveryAssignment(
+                        youtube_video_id="vid2",
+                        topic_name="Business",
+                        confidence=0.8,
+                        reason="title mentions startup",
+                    ),
+                ],
+            ),
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def test_sample_endpoint_returns_picked_episodes(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            self._seed_run(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(app, "GET", "/api/refine/sample")
+            self.assertEqual(status, "200 OK")
+            payload = json.loads(body)
+            self.assertIsNotNone(payload["discovery_run_id"])
+            self.assertEqual(payload["pool_size"], 2)
+            yt_ids = {e["youtube_video_id"] for e in payload["episodes"]}
+            self.assertEqual(yt_ids, {"vid1", "vid2"})
+            for episode in payload["episodes"]:
+                self.assertIn(episode["slot_kind"], {"coverage", "blind_spot"})
+                self.assertIn("topic", episode)
+                self.assertIn("title", episode)
+                self.assertIn("transcript_status", episode)
+
+    def test_sample_endpoint_errors_when_no_discovery_run(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            app = ReviewUIApp(db_path)
+            status, body = self._call_app(app, "GET", "/api/refine/sample")
+            self.assertEqual(status, "400 Bad Request")
+            self.assertIn("discover", json.loads(body)["error"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()

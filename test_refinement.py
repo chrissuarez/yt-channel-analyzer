@@ -464,5 +464,60 @@ class RefineCliTests(unittest.TestCase):
                 cli.main(["refine", "--db-path", str(db_path), "--project-name", "proj"])
 
 
+class DescribeRefinementSampleTests(unittest.TestCase):
+    def test_describes_picked_sample_with_slots_topics_and_pool_size(self) -> None:
+        from yt_channel_analyzer.refinement import describe_refinement_sample
+
+        with TemporaryDirectory() as tmp:
+            db_path = _fresh_db(tmp)
+            _seed(
+                db_path,
+                [
+                    ("a1", 600, [("A", 0.9)]),
+                    ("a2", 600, [("A", 0.8)]),
+                    ("a3", 600, [("A", 0.7)]),
+                    ("b1", 600, [("B", 0.6)]),
+                    ("b2", 600, [("B", 0.5)]),
+                    ("c1", 600, [("C", 0.4)]),
+                    ("u1", 600, []),
+                    ("u2", 600, []),
+                ],
+            )
+            db.upsert_video_transcript(
+                db_path,
+                youtube_video_id="a1",
+                transcript=TranscriptRecord(
+                    status="available", source="generated", language_code="en", text="t"
+                ),
+            )
+            result = describe_refinement_sample(db_path, project_name="proj", sample_size=6)
+            self.assertEqual(result["pool_size"], 8)
+            self.assertIsNotNone(result["discovery_run_id"])
+            episodes = result["episodes"]
+            self.assertEqual(
+                [e["youtube_video_id"] for e in episodes],
+                ["a1", "b1", "c1", "a2", "b2", "a3"],
+            )
+            kinds = {e["youtube_video_id"]: e["slot_kind"] for e in episodes}
+            self.assertEqual(kinds["a1"], "coverage")
+            self.assertEqual(kinds["b2"], "blind_spot")
+            a1 = next(e for e in episodes if e["youtube_video_id"] == "a1")
+            self.assertEqual(a1["topic"], "A")
+            self.assertEqual(a1["confidence"], 0.9)
+            self.assertEqual(a1["title"], "A1")
+            self.assertEqual(a1["transcript_status"], "available")
+
+    def test_unknown_discovery_run_id_raises(self) -> None:
+        from yt_channel_analyzer.refinement import describe_refinement_sample
+
+        with TemporaryDirectory() as tmp:
+            db_path = _fresh_db(tmp)
+            _seed(db_path, [("a1", 600, [("A", 0.9)])])
+            with self.assertRaises(ValueError):
+                describe_refinement_sample(
+                    db_path, project_name="proj", discovery_run_id=999
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
