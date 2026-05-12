@@ -27,6 +27,21 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — Fix: empty subtopic buckets in the review-UI discovery map
+
+### Done
+- Operator-driven session on a fresh `tmp/doac-sticky.sqlite` (init-db → fetch-videos 50 → `discover --real` run 1: 7 topics, 13 eps, 21 assignments) surfaced empty subtopics in the Discovery view. Root cause: `review_ui._build_discovery_topic_map` mapped each `(topic, episode)` to a **single** subtopic, but discovery assigns episodes multi-subtopic within a topic (8 such episodes in the DOAC run). The alphabetically-later subtopic "won" the episode; the other rendered with 0 episodes — hit `Housing & Real Estate` (lost `jLFG_FZKbks` to `Investment & Wealth Strategies`) and `Autocratic Tactics & Power Consolidation` (lost `kwEtOyaFhCA` to `Democratic Collapse & Authoritarianism`).
+- Fix in `review_ui.py`: `subtopic_assignment` is now set-valued (`(topic_id, video_id) → {subtopic names}`); `_bucket_topic` adds an episode to *every* bucket it's in, falls to `unassigned_within_topic` only if it's in none, and **omits any subtopic bucket that ends up with 0 episodes** (enforces the "no empty subtopic" invariant defensively, e.g. against orphan `subtopics` rows). `subtopic_count` now counts only the non-empty buckets.
+- 2 regression tests in `test_discovery.py` (`DiscoveryTopicMapSubtopicPayloadTests`): episode in 2 subtopics of one topic appears in both buckets / not in unassigned; an orphan zero-episode subtopic row is omitted from the payload. Gate **375 green**.
+
+### Learned
+- A topic's subtopic episode-counts can now legitimately **sum to more than the topic's episode_count** (a multi-subtopic episode is counted in each of its buckets). Expected; not a bug.
+- Phase B refine in this session: transcript fetch via `youtube-transcript-api` returned `IpBlocked` from this WSL host (real fetches had worked earlier the same day → likely a transient rate-block). `run_refinement` aborts cleanly with "no usable transcripts for the refinement sample" before any LLM spend; real refine retry deferred.
+
+### Next
+- Retry `refine --real` on `tmp/doac-sticky.sqlite` once the YouTube IP block clears.
+- (Carried) refinement prompt over-proposes / near-misses topics — CURRENT_STATE polish #3.
+
 ## 2026-05-12 — C: real DOAC pass through Phase B (paid ~$0.75) + 2 robustness fixes
 
 ### Done

@@ -5663,7 +5663,12 @@ def _build_discovery_topic_map(
             }
         )
 
-    subtopic_assignment: dict[tuple[int, str], str] = {}
+    # An episode can belong to several subtopics *of the same topic* (discovery
+    # assigns subtopics multi-valued, just like topics). So this maps to a set
+    # of subtopic names, not a single one — collapsing it to one would orphan
+    # the others and make them render with zero episodes (see the empty-subtopic
+    # bug). Names are tracked per topic in first-seen order.
+    subtopic_assignment: dict[tuple[int, str], set[str]] = {}
     subtopic_names_by_topic: dict[int, list[str]] = {}
     for row in subtopic_rows:
         topic_id = int(row["topic_id"])
@@ -5671,21 +5676,31 @@ def _build_discovery_topic_map(
         names = subtopic_names_by_topic.setdefault(topic_id, [])
         if sub_name not in names:
             names.append(sub_name)
-        subtopic_assignment[(topic_id, row["youtube_video_id"])] = sub_name
+        subtopic_assignment.setdefault((topic_id, row["youtube_video_id"]), set()).add(
+            sub_name
+        )
 
     def _bucket_topic(topic_id: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         names = subtopic_names_by_topic.get(topic_id, [])
         bucketed: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
         unassigned: list[dict[str, Any]] = []
         for ep in episodes_by_topic.get(topic_id, []):
-            sub = subtopic_assignment.get((topic_id, ep["youtube_video_id"]))
-            if sub is not None and sub in bucketed:
-                bucketed[sub].append(ep)
+            subs = {
+                s
+                for s in subtopic_assignment.get((topic_id, ep["youtube_video_id"]), set())
+                if s in bucketed
+            }
+            if subs:
+                for sub in subs:
+                    bucketed[sub].append(ep)
             else:
                 unassigned.append(ep)
+        # Drop any subtopic that ended up with no episodes — the operator
+        # invariant is that every subtopic shown has at least one episode.
         subtopic_payload = [
             {"name": name, "episode_count": len(bucketed[name]), "episodes": bucketed[name]}
             for name in names
+            if bucketed[name]
         ]
         return subtopic_payload, unassigned
 
