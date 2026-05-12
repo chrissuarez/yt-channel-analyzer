@@ -1581,6 +1581,106 @@ class DiscoveryTopicMapSubtopicPayloadTests(unittest.TestCase):
             )
             self.assertEqual(health["unassigned_within_topic"], [])
 
+    def test_episode_in_multiple_subtopics_of_same_topic_shows_in_all(self) -> None:
+        """An episode assigned to several subtopics of one topic must appear in
+        each of those buckets — collapsing to one orphans the others and they
+        render with zero episodes (the empty-subtopic bug)."""
+        from yt_channel_analyzer.discovery import DiscoverySubtopic
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    subtopics=[
+                        DiscoverySubtopic(name="Sleep", parent_topic="Health"),
+                        DiscoverySubtopic(name="Diet", parent_topic="Health"),
+                    ],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="sleep and diet",
+                            subtopic_name="Sleep",
+                        ),
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="sleep and diet",
+                            subtopic_name="Diet",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            payload = build_state_payload(db_path)
+            health = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }["Health"]
+            buckets = {b["name"]: b for b in health["subtopics"]}
+            self.assertEqual(set(buckets), {"Sleep", "Diet"})
+            self.assertEqual(buckets["Sleep"]["episode_count"], 1)
+            self.assertEqual(buckets["Diet"]["episode_count"], 1)
+            # No bucket may be empty, and the episode isn't dumped into
+            # unassigned just because it has more than one subtopic.
+            self.assertTrue(all(b["episode_count"] > 0 for b in health["subtopics"]))
+            self.assertEqual(health["unassigned_within_topic"], [])
+
+    def test_subtopic_with_zero_episodes_is_omitted(self) -> None:
+        """A subtopic row that ends up with no episodes assigned to its parent
+        topic in this run must not appear in the payload at all."""
+        from yt_channel_analyzer.review_ui import build_state_payload
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=lambda videos: DiscoveryPayload(
+                    topics=["Health"],
+                    subtopics=[],
+                    assignments=[
+                        DiscoveryAssignment(
+                            youtube_video_id="vid1",
+                            topic_name="Health",
+                            confidence=0.9,
+                            reason="cue",
+                            subtopic_name="Sleep",
+                        ),
+                    ],
+                ),
+                model="stub",
+                prompt_version="discovery-v2",
+            )
+
+            # Manually introduce an orphan subtopic with no episode in the run.
+            with sqlite3.connect(db_path) as conn:
+                topic_id = conn.execute(
+                    "SELECT id FROM topics WHERE name = 'Health'"
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO subtopics(topic_id, name) VALUES (?, 'Ghost')",
+                    (topic_id,),
+                )
+
+            payload = build_state_payload(db_path)
+            health = {
+                t["name"]: t for t in payload["discovery_topic_map"]["topics"]
+            }["Health"]
+            self.assertNotIn("Ghost", {b["name"] for b in health["subtopics"]})
+            self.assertTrue(all(b["episode_count"] > 0 for b in health["subtopics"]))
+
     def test_topic_payload_collects_episodes_without_subtopic_in_unassigned(self) -> None:
         from yt_channel_analyzer.discovery import DiscoverySubtopic
         from yt_channel_analyzer.review_ui import build_state_payload
