@@ -27,6 +27,23 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — Phase B slice 6: Refine UI proposal-review screen + before→after panel (Phase B complete)
+
+### Done
+- Branched `feat/issue-06-refine-ui-proposal-review` off `main`. Two iterations.
+- **Part 1 (commit on branch)** — proposal-review screen + transcript-checked pill. `db.list_pending_taxonomy_proposals(connection, project_id)`: all `pending` `taxonomy_proposals` for the project's refinement runs (join runs→channels for project scope, LEFT JOIN videos for the source episode), ordered newest-run-first → subtopics-before-topics → name. `review_ui`: `build_state_payload` gains `refine_proposals` (via `_build_refine_proposals`); `POST /api/refine/proposal/{accept,reject}` → `db.accept_taxonomy_proposal` / `db.reject_taxonomy_proposal` (the accept handler reports a missing-parent rejection back in `result.status`/`message`); imported `accept_taxonomy_proposal`/`reject_taxonomy_proposal`/`list_pending_taxonomy_proposals`. Refine stage: `renderRefineProposals` (group by run desc; within a run subtopics first, then topics) / `renderProposalCard` (kind chip, name, parent, evidence, source-episode link, Accept/Reject) / `acceptProposal` / `rejectProposal` (POST → `fetchState()` refresh; accept bumps `state.refine.acceptedThisSession`); appended below the sample-setup block and shown on the loading/error/not-loaded states too; re-run-Discover nudge once `acceptedThisSession > 0`. "transcript-checked" pill on `episode.assignment_source === 'refine'` rows in both `renderDiscoveryEpisodeItemFocused` and `renderDiscoveryEpisodeItem`. `UI_REVISION`→`…-proposal-review`. 7 tests (`RefineProposalReviewTests` in `test_discovery.py`).
+- **Part 2 (this commit)** — before→after sanity panel. Additive `refinement_episodes.assignments_before_json TEXT` (in `SCHEMA_STATEMENTS` + `REQUIRED_TABLE_COLUMNS` — plain ADD COLUMN, no CHECK rebuild, doesn't trip the destructive-migration HITL pause); `add_refinement_episodes` now takes 2- or 3-tuples (`(video_id, status[, before_json])`) and `ON CONFLICT … DO UPDATE` uses `COALESCE(excluded.assignments_before_json, refinement_episodes.assignments_before_json)` so a later status-only re-record keeps the snapshot. `refinement.py`: stage 3 builds `before_json_by_video_id = {ctx.video_id: json.dumps(ctx.current_assignments)}` (the snapshot is already computed for the prompt — just persist it) and passes 3-tuples. `db.list_refinement_episode_changes(connection, project_id)`: per `success` run (newest first) the sampled episodes with `before` (parsed JSON) + `after` (`_assignments_after_for_video` — current `assignment_source IN ('refine','manual')` topic rows + their subtopic). `review_ui`: `build_state_payload` gains `refine_review` (via `_build_refine_review`); `renderRefineReview` / `renderRefineReviewEpisode` (per-episode added/dropped/corrected diff chips + an after-list with a "✗ wrong" control reusing `markEpisodeWrong` → existing `/api/discovery/episode/mark-wrong`); appended after the proposals block. `UI_REVISION`→`…-before-after`. New tests: `list_refinement_episode_changes` + before-json column/COALESCE in `test_refinement_schema.py`; `assignments_before_json` populated by `run_refinement` in `test_refinement.py`; `refine_review` payload shape + HTML wiring in `test_discovery.py`.
+- `review_ui.py` net diff ≈150 lines across the two parts (well under the 300-line soft cap). Gate **369 green**; `test_transcripts.py` untouched. ROADMAP §B6 ticked; issue 06 → done; cheatsheet §2 + `docs/operator-workflow.md` Phase B section finalized; new `.scratch/phase-b-refinement/SMOKE.md` (real DOAC operator runbook).
+
+### Learned
+- `markEpisodeWrong` already ends with `await fetchState()`, so the before→after panel "✗ wrong" control needs no new endpoint and no manual re-render — the state refresh re-runs `renderRefine` which re-reads `state.payload.refine_review`.
+- Watch for stray NUL bytes when hand-writing JS template literals into the Python triple-quoted HTML — a `${a.topic} ${a.subtopic}` line ended up with `\x00` where a space should be and only surfaced as `SyntaxError: source code string cannot contain null bytes` at *import* time (Python can't tokenize the .py at all). `python3 -c "open(f,'rb').read().count(b'\x00')"` to find it.
+
+### Next
+- Phase B is code-complete. Run `.scratch/phase-b-refinement/SMOKE.md` — a real DOAC pass: fresh `discover --real` → Refine stage (sample → fetch → cost confirm → proposal review + before→after) → accept proposals → `discover --real` re-run to spread them. Then Phase C (claim extraction / embeddings / clustering).
+
+---
+
 ## 2026-05-12 — Phase B slice 4: discovery prompt taxonomy awareness + never-downgrade
 
 ### Done

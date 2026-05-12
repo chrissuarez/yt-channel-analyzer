@@ -104,6 +104,10 @@ class RefinementSchemaTests(unittest.TestCase):
                     self.assertTrue(db._table_exists(conn, table), table)
                 self.assertIn("refinement_run_id", db._get_existing_columns(conn, "video_topics"))
                 self.assertIn("refinement_run_id", db._get_existing_columns(conn, "video_subtopics"))
+                self.assertIn(
+                    "assignments_before_json",
+                    db._get_existing_columns(conn, "refinement_episodes"),
+                )
                 vt_sql = conn.execute(
                     "SELECT sql FROM sqlite_master WHERE name = 'video_topics'"
                 ).fetchone()[0]
@@ -183,15 +187,76 @@ class RefinementRunHelperTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     db.set_refinement_run_status(conn, run_id, "bogus")
 
-                # add_refinement_episodes is idempotent and updates the stored status.
-                db.add_refinement_episodes(conn, run_id, [(ids["video_id"], "available")])
+                # add_refinement_episodes is idempotent, updates the stored
+                # status, records the before-snapshot, and a later status-only
+                # call (no snapshot) keeps the prior snapshot (COALESCE).
+                db.add_refinement_episodes(
+                    conn, run_id, [(ids["video_id"], "available", '[{"topic": "Health"}]')]
+                )
                 db.add_refinement_episodes(conn, run_id, [(ids["video_id"], "unavailable")])
                 rows = conn.execute(
-                    "SELECT video_id, transcript_status_at_run FROM refinement_episodes WHERE refinement_run_id = ?",
+                    "SELECT video_id, transcript_status_at_run, assignments_before_json "
+                    "FROM refinement_episodes WHERE refinement_run_id = ?",
                     (run_id,),
                 ).fetchall()
-                self.assertEqual(rows, [(ids["video_id"], "unavailable")])
+                self.assertEqual(
+                    rows, [(ids["video_id"], "unavailable", '[{"topic": "Health"}]')]
+                )
                 conn.commit()
+
+    def test_list_refinement_episode_changes_before_after(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = _fresh_db(tmpdir)
+            with db.connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                ids = _seed_project(conn)
+                run_id = db.create_refinement_run(
+                    conn,
+                    channel_id=ids["channel_id"],
+                    discovery_run_id=ids["discovery_run_id"],
+                    model="haiku-4.5",
+                    prompt_version="refine-v1",
+                    n_sample=1,
+                )
+                db.set_refinement_run_status(conn, run_id, "running")
+                db.add_refinement_episodes(
+                    conn,
+                    run_id,
+                    [(
+                        ids["video_id"],
+                        "available",
+                        '[{"topic": "Health", "subtopic": null, "confidence": 0.5, "reason": "meta"}]',
+                    )],
+                )
+                db.write_refine_assignments(
+                    conn,
+                    channel_id=ids["channel_id"],
+                    refinement_run_id=run_id,
+                    video_id=ids["video_id"],
+                    assignments=[{
+                        "topic_name": "Health",
+                        "subtopic_name": "Deep Sleep",
+                        "confidence": 0.95,
+                        "reason": "transcript",
+                    }],
+                )
+                db.set_refinement_run_status(conn, run_id, "success")
+                conn.commit()
+                changes = db.list_refinement_episode_changes(conn, ids["project_id"])
+        self.assertEqual(len(changes), 1)
+        run = changes[0]
+        self.assertEqual(run["refinement_run_id"], run_id)
+        self.assertEqual(len(run["episodes"]), 1)
+        ep = run["episodes"][0]
+        self.assertEqual(ep["youtube_video_id"], "vid1")
+        self.assertEqual(
+            ep["before"],
+            [{"topic": "Health", "subtopic": None, "confidence": 0.5, "reason": "meta"}],
+        )
+        self.assertEqual(len(ep["after"]), 1)
+        self.assertEqual(ep["after"][0]["topic"], "Health")
+        self.assertEqual(ep["after"][0]["subtopic"], "Deep Sleep")
+        self.assertEqual(ep["after"][0]["assignment_source"], "refine")
 
     def test_proposal_accept_creates_node_and_resolves_renamed_parent(self) -> None:
         with TemporaryDirectory() as tmpdir:

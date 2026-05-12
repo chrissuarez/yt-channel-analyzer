@@ -27,6 +27,7 @@ Tests inject it directly together with a fake ``transcript_fetcher``.
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import sqlite3
 from collections import defaultdict
@@ -1039,10 +1040,20 @@ def _run_refinement_impl(
                 """,
                 (discovery_run_id, model, REFINEMENT_PROMPT_VERSION, len(contexts), run_id),
             )
+        before_json_by_video_id = {
+            ctx.video_id: json.dumps(ctx.current_assignments) for ctx in contexts
+        }
         db.add_refinement_episodes(
             connection,
             run_id,
-            [(video_id, status_by_youtube_id.get(youtube_id)) for video_id, youtube_id in survivors],
+            [
+                (
+                    video_id,
+                    status_by_youtube_id.get(youtube_id),
+                    before_json_by_video_id.get(video_id),
+                )
+                for video_id, youtube_id in survivors
+            ],
         )
         connection.commit()
 

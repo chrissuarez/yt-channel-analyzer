@@ -32,6 +32,7 @@ from yt_channel_analyzer.db import (
     get_subtopic_suggestion_review_rows,
     get_topic_suggestion_review_rows,
     list_pending_taxonomy_proposals,
+    list_refinement_episode_changes,
     list_subtopic_suggestion_application_rows,
     list_approved_comparison_groups_for_subtopic,
     list_approved_subtopics_for_topic,
@@ -77,7 +78,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup-proposal-review"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup-proposal-review-before-after"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -2014,6 +2015,16 @@ HTML_PAGE = """<!doctype html>
       margin-top: 16px; padding: 12px 14px; border-radius: 8px;
       background: rgba(15, 118, 110, 0.08); font-size: 13px; color: var(--ink-soft);
     }
+    .refine-review { margin-top: 28px; }
+    .refine-diff-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; font-size: 12px; }
+    .refine-diff-chips span {
+      font-family: var(--mono); padding: 1px 6px; border-radius: 4px; background: var(--rule);
+    }
+    .refine-diff-add { background: rgba(15, 118, 110, 0.14) !important; color: var(--teal); }
+    .refine-diff-drop { background: rgba(216, 90, 48, 0.14) !important; color: var(--coral); }
+    .refine-after-list { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+    .refine-after-list li { margin: 2px 0; }
+    .refine-after-list .discovery-episode-wrong { margin-left: 6px; }
     .discovery-episode-checked {
       font-family: var(--mono); font-size: 10px; padding: 1px 5px;
       border-radius: 4px; background: rgba(15, 118, 110, 0.14); color: var(--teal);
@@ -4458,16 +4469,16 @@ HTML_PAGE = """<!doctype html>
       const host = document.getElementById('refine-setup');
       if (!host) return;
       const r = state.refine;
-      const proposalsHtml = renderRefineProposals();
-      if (r.loading) { host.innerHTML = '<p class="refine-empty">Loading the auto-picked sample…</p>' + proposalsHtml; return; }
+      const extrasHtml = renderRefineProposals() + renderRefineReview();
+      if (r.loading) { host.innerHTML = '<p class="refine-empty">Loading the auto-picked sample…</p>' + extrasHtml; return; }
       if (r.error) {
         const hint = /discover/i.test(r.error)
           ? ' <button class="secondary" onclick="setActiveStage(\\'discover\\')">Go to Discover →</button>'
           : '';
-        host.innerHTML = `<p class="refine-note warn">${escapeHtml(r.error)}</p><p>${hint}</p>` + proposalsHtml;
+        host.innerHTML = `<p class="refine-note warn">${escapeHtml(r.error)}</p><p>${hint}</p>` + extrasHtml;
         return;
       }
-      if (!r.loaded) { host.innerHTML = '<p class="refine-empty">Open this stage to load the sample.</p>' + proposalsHtml; return; }
+      if (!r.loaded) { host.innerHTML = '<p class="refine-empty">Open this stage to load the sample.</p>' + extrasHtml; return; }
       const eps = r.episodes;
       const realOn = r.mode === 'real';
       const estLabel = r.estimate ? `$${Number(r.estimate.estimated_cost_usd || 0).toFixed(4)}` : '—';
@@ -4511,7 +4522,7 @@ HTML_PAGE = """<!doctype html>
           <button class="discover-run-action" onclick="refineRun()" ${canRun ? '' : 'disabled'}>Run refinement (${estLabel})</button>
         </div>
         ${runResultHtml}
-        ${proposalsHtml}
+        ${extrasHtml}
       `;
     }
 
@@ -4584,6 +4595,46 @@ HTML_PAGE = """<!doctype html>
       } catch (error) {
         setStatus(error.message || 'Reject failed.', true);
       }
+    }
+
+    function renderRefineReview() {
+      const runs = (state.payload && state.payload.refine_review) || [];
+      if (!runs.length) return '';
+      const groups = runs.map((run) => {
+        const eps = (run.episodes || []).map(renderRefineReviewEpisode).join('');
+        return `<div class="refine-prop-run"><h3>Refinement run #${escapeHtml(run.refinement_run_id)} · ${(run.episodes || []).length} episode(s) sampled</h3>${eps || '<p class="refine-empty">No episodes recorded.</p>'}</div>`;
+      }).join('');
+      return `<div class="refine-proposals refine-review"><h2>Before → after (sampled episodes)</h2><p class="muted small">Transcript-grade reassignments per sampled episode. Mark one wrong if the transcript re-judgement still missed.</p>${groups}</div>`;
+    }
+
+    function renderRefineReviewEpisode(ep) {
+      const before = ep.before || [];
+      const after = ep.after || [];
+      const beforeByTopic = new Map(before.map((a) => [a.topic, a]));
+      const afterByTopic = new Map(after.map((a) => [a.topic, a]));
+      const added = after.filter((a) => !beforeByTopic.has(a.topic));
+      const dropped = before.filter((a) => !afterByTopic.has(a.topic));
+      const corrected = after.filter((a) => beforeByTopic.has(a.topic) && (beforeByTopic.get(a.topic).subtopic || '') !== (a.subtopic || ''));
+      const watchUrl = ep.youtube_video_id ? `https://www.youtube.com/watch?v=${encodeURIComponent(ep.youtube_video_id)}` : null;
+      const titleHtml = watchUrl
+        ? `<a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener">${escapeHtml(ep.title || ep.youtube_video_id)}</a>`
+        : escapeHtml(ep.title || '(untitled)');
+      const chips = [];
+      added.forEach((a) => chips.push(`<span class="refine-diff-add">+ ${escapeHtml(a.topic)}${a.subtopic ? ' / ' + escapeHtml(a.subtopic) : ''}</span>`));
+      dropped.forEach((a) => chips.push(`<span class="refine-diff-drop">− ${escapeHtml(a.topic)}${a.subtopic ? ' / ' + escapeHtml(a.subtopic) : ''}</span>`));
+      corrected.forEach((a) => chips.push(`<span class="refine-diff-fix">${escapeHtml(a.topic)}: <s>${escapeHtml(beforeByTopic.get(a.topic).subtopic || '—')}</s> → ${escapeHtml(a.subtopic || '—')}</span>`));
+      const diffHtml = chips.length ? `<div class="refine-diff-chips">${chips.join('')}</div>` : '<div class="refine-diff-chips muted small">No change vs. the metadata pass.</div>';
+      const afterRows = after.length ? after.map((a) => {
+        const conf = (a.confidence == null) ? '' : ` <span class="mono soft">${Number(a.confidence).toFixed(2)}</span>`;
+        const src = a.assignment_source === 'manual' ? ' <span class="mono soft">(manual)</span>' : '';
+        const wrongBtn = `<button class="discovery-episode-wrong" type="button" title="Mark this topic wrong for this episode" onclick='markEpisodeWrong(${JSON.stringify(a.topic)}, ${JSON.stringify(ep.youtube_video_id || '')}, null)'>✗ wrong</button>`;
+        return `<li>${escapeHtml(a.topic)}${a.subtopic ? ' / ' + escapeHtml(a.subtopic) : ''}${conf}${src} ${wrongBtn}</li>`;
+      }).join('') : '<li class="muted small">No assignments after the run.</li>';
+      return `<div class="refine-prop-card">
+        <div class="refine-prop-head">📄 ${titleHtml} <span class="mono soft">${escapeHtml(ep.youtube_video_id || '')}</span></div>
+        ${diffHtml}
+        <ul class="refine-after-list">${afterRows}</ul>
+      </div>`;
     }
 
     function renderConsume(payload) {
@@ -5681,6 +5732,14 @@ def _build_refine_proposals(db_path: Path, project_id: int) -> list[dict[str, An
         return list_pending_taxonomy_proposals(connection, project_id)
 
 
+def _build_refine_review(db_path: Path, project_id: int) -> list[dict[str, Any]]:
+    """Per ``success`` refinement run, the sampled episodes' before→after
+    assignments — the Refine-stage sanity panel."""
+    with connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        return list_refinement_episode_changes(connection, project_id)
+
+
 def build_state_payload(
     db_path: str | Path,
     *,
@@ -5899,6 +5958,7 @@ def build_state_payload(
         supply_videos: list[dict[str, Any]] = []
         discover_runs: list[dict[str, Any]] = []
         refine_proposals: list[dict[str, Any]] = []
+        refine_review: list[dict[str, Any]] = []
     else:
         channel_overview = _build_channel_overview(
             db_path,
@@ -5908,6 +5968,7 @@ def build_state_payload(
         refine_proposals = _build_refine_proposals(
             db_path, primary_channel.project_id
         )
+        refine_review = _build_refine_review(db_path, primary_channel.project_id)
         supply_channel = _build_supply_channel(
             db_path, channel_id=primary_channel.channel_id
         )
@@ -5938,6 +5999,7 @@ def build_state_payload(
         "supply_max_limit": SUPPLY_MAX_LIMIT,
         "discover_runs": discover_runs,
         "refine_proposals": refine_proposals,
+        "refine_review": refine_review,
         "latest_subtopic_run_id_by_topic": latest_subtopic_run_id_by_topic,
         "topic_reviews": {
             "eligible_video_count": len(topic_generation_candidates),

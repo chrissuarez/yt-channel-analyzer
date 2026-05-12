@@ -8370,14 +8370,32 @@ class RefineProposalReviewTests(unittest.TestCase):
             self.assertEqual(status, "400 Bad Request")
             self.assertIn("proposal_id", json.loads(body)["error"])
 
+    def test_payload_refine_review_has_before_after_for_sampled_episodes(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "t.sqlite3"
+            app = self._seed_with_proposals(db_path)
+            review = self._state(app)["refine_review"]
+            self.assertEqual(len(review), 1)
+            run = review[0]
+            self.assertEqual(run["refinement_run_id"], 1)
+            yt_ids = {ep["youtube_video_id"] for ep in run["episodes"]}
+            self.assertEqual(yt_ids, {"vid1", "vid2"})
+            for ep in run["episodes"]:
+                self.assertIsInstance(ep["before"], list)
+                self.assertIsInstance(ep["after"], list)
+                # the stub echoes assignments, so the topic survives as a refine row
+                self.assertTrue(any(a["assignment_source"] == "refine" for a in ep["after"]))
+
     def test_html_wires_proposal_review_and_transcript_checked_pill(self) -> None:
         from yt_channel_analyzer.review_ui import ReviewUIApp
 
         html = ReviewUIApp._render_html_page()
         self.assertIn("function renderRefineProposals", html)
+        self.assertIn("function renderRefineReview", html)
         self.assertIn("/api/refine/proposal/accept", html)
         self.assertIn("/api/refine/proposal/reject", html)
         self.assertIn("refine_proposals", html)
+        self.assertIn("refine_review", html)
         self.assertIn("discovery-episode-checked", html)
         self.assertIn("assignment_source === 'refine'", html)
 

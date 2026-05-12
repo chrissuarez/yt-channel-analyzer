@@ -145,10 +145,21 @@ class StubRunTests(unittest.TestCase):
             self.assertEqual(runs[0]["id"], result.run_id)
 
             episodes = _query(
-                db_path, "SELECT video_id, transcript_status_at_run FROM refinement_episodes WHERE refinement_run_id = ?", (result.run_id,)
+                db_path,
+                "SELECT video_id, transcript_status_at_run, assignments_before_json "
+                "FROM refinement_episodes WHERE refinement_run_id = ?",
+                (result.run_id,),
             )
             self.assertEqual(len(episodes), 3)
             self.assertTrue(all(row["transcript_status_at_run"] == "available" for row in episodes))
+            # Each sampled episode keeps a snapshot of its metadata-derived
+            # assignments before the run (the before-side of the sanity panel).
+            self.assertTrue(all(row["assignments_before_json"] for row in episodes))
+            import json as _json
+
+            for row in episodes:
+                before = _json.loads(row["assignments_before_json"])
+                self.assertTrue(any(a.get("topic") == "Health" for a in before))
 
             proposals = _query(db_path, "SELECT kind, name, status FROM taxonomy_proposals ORDER BY id")
             self.assertEqual(sum(1 for p in proposals if p["kind"] == "subtopic"), 3)

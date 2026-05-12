@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -426,6 +427,7 @@ SCHEMA_STATEMENTS = [
         refinement_run_id INTEGER NOT NULL,
         video_id INTEGER NOT NULL,
         transcript_status_at_run TEXT,
+        assignments_before_json TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY(refinement_run_id, video_id),
         FOREIGN KEY(refinement_run_id) REFERENCES refinement_runs(id) ON DELETE CASCADE,
@@ -668,6 +670,7 @@ REQUIRED_TABLE_COLUMNS = {
         "refinement_run_id": "INTEGER NOT NULL",
         "video_id": "INTEGER NOT NULL",
         "transcript_status_at_run": "TEXT",
+        "assignments_before_json": "TEXT",
         "created_at": "TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
     },
     "taxonomy_proposals": {
@@ -5675,23 +5678,34 @@ def set_refinement_run_error(
 def add_refinement_episodes(
     connection: sqlite3.Connection,
     run_id: int,
-    rows: list[tuple[int, str | None]],
+    rows: list[tuple],
 ) -> None:
     """Record the episodes a refinement run sampled.
 
-    ``rows`` is ``[(video_id, transcript_status_at_run), ...]`` (internal video
-    ids). Idempotent per ``(run_id, video_id)`` — re-recording updates the
-    stored transcript status.
+    ``rows`` is ``[(video_id, transcript_status_at_run[, assignments_before_json]), ...]``
+    (internal video ids). The optional third element is a JSON string of the
+    episode's metadata-derived assignments *before* this run — the before-side
+    of the proposal-review sanity panel. Idempotent per ``(run_id, video_id)``:
+    re-recording updates the stored transcript status and only overwrites the
+    before-snapshot when a non-NULL one is supplied.
     """
+    payload: list[tuple] = []
+    for row in rows:
+        video_id, status = row[0], row[1]
+        before_json = row[2] if len(row) > 2 else None
+        payload.append((run_id, video_id, status, before_json))
     connection.executemany(
         """
         INSERT INTO refinement_episodes(
-            refinement_run_id, video_id, transcript_status_at_run
-        ) VALUES (?, ?, ?)
+            refinement_run_id, video_id, transcript_status_at_run, assignments_before_json
+        ) VALUES (?, ?, ?, ?)
         ON CONFLICT(refinement_run_id, video_id) DO UPDATE SET
-            transcript_status_at_run = excluded.transcript_status_at_run
+            transcript_status_at_run = excluded.transcript_status_at_run,
+            assignments_before_json = COALESCE(
+                excluded.assignments_before_json, refinement_episodes.assignments_before_json
+            )
         """,
-        [(run_id, video_id, status) for video_id, status in rows],
+        payload,
     )
 
 
@@ -5883,6 +5897,100 @@ def list_pending_taxonomy_proposals(
         }
         for r in rows
     ]
+
+
+def _assignments_after_for_video(
+    connection: sqlite3.Connection, video_id: int
+) -> list[dict[str, Any]]:
+    """Current ``refine``/``manual`` topic assignments for ``video_id`` (the
+    after-side of the proposal-review panel), with their subtopic if any."""
+    subtopic_by_topic_id = {
+        int(r["topic_id"]): r["subtopic"]
+        for r in connection.execute(
+            """
+            SELECT s.topic_id AS topic_id, s.name AS subtopic
+            FROM video_subtopics vs JOIN subtopics s ON s.id = vs.subtopic_id
+            WHERE vs.video_id = ? AND vs.assignment_source IN ('refine', 'manual')
+            """,
+            (video_id,),
+        ).fetchall()
+    }
+    out: list[dict[str, Any]] = []
+    for r in connection.execute(
+        """
+        SELECT t.id AS topic_id, t.name AS topic, vt.confidence AS confidence,
+               vt.reason AS reason, vt.assignment_source AS assignment_source
+        FROM video_topics vt JOIN topics t ON t.id = vt.topic_id
+        WHERE vt.video_id = ? AND vt.assignment_source IN ('refine', 'manual')
+        ORDER BY vt.confidence DESC, t.name COLLATE NOCASE
+        """,
+        (video_id,),
+    ).fetchall():
+        out.append(
+            {
+                "topic": r["topic"],
+                "subtopic": subtopic_by_topic_id.get(int(r["topic_id"])),
+                "confidence": r["confidence"],
+                "reason": r["reason"],
+                "assignment_source": r["assignment_source"],
+            }
+        )
+    return out
+
+
+def list_refinement_episode_changes(
+    connection: sqlite3.Connection, project_id: int
+) -> list[dict[str, Any]]:
+    """Per ``success`` refinement run of the project (newest first), the sampled
+    episodes with their assignments ``before`` the run (the stored snapshot) and
+    ``after`` (current ``refine``/``manual`` rows). Drives the before→after
+    sanity panel. ``connection.row_factory`` must be :class:`sqlite3.Row`."""
+    runs = connection.execute(
+        """
+        SELECT rr.id AS run_id, rr.discovery_run_id AS discovery_run_id,
+               rr.n_sample AS n_sample, rr.created_at AS created_at
+        FROM refinement_runs rr JOIN channels ch ON ch.id = rr.channel_id
+        WHERE ch.project_id = ? AND rr.status = 'success'
+        ORDER BY rr.id DESC
+        """,
+        (project_id,),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for run in runs:
+        episodes: list[dict[str, Any]] = []
+        for ep in connection.execute(
+            """
+            SELECT re.video_id AS video_id, re.assignments_before_json AS before_json,
+                   v.youtube_video_id AS youtube_video_id, v.title AS title
+            FROM refinement_episodes re JOIN videos v ON v.id = re.video_id
+            WHERE re.refinement_run_id = ?
+            ORDER BY v.title COLLATE NOCASE
+            """,
+            (int(run["run_id"]),),
+        ).fetchall():
+            try:
+                before = json.loads(ep["before_json"]) if ep["before_json"] else []
+            except (TypeError, ValueError):
+                before = []
+            episodes.append(
+                {
+                    "video_id": int(ep["video_id"]),
+                    "youtube_video_id": ep["youtube_video_id"],
+                    "title": ep["title"],
+                    "before": before if isinstance(before, list) else [],
+                    "after": _assignments_after_for_video(connection, int(ep["video_id"])),
+                }
+            )
+        result.append(
+            {
+                "refinement_run_id": int(run["run_id"]),
+                "discovery_run_id": run["discovery_run_id"],
+                "n_sample": run["n_sample"],
+                "created_at": run["created_at"],
+                "episodes": episodes,
+            }
+        )
+    return result
 
 
 def reject_taxonomy_proposal(

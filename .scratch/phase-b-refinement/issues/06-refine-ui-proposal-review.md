@@ -1,8 +1,8 @@
 # 06 — Refine UI: proposal-review screen + transcript-checked pill
 
-Status: needs-triage
-Type: AFK (scoped to stay under the 300-changed-line `review_ui.py` HITL-pause threshold; if it can't, split it)
-Branch: `feat/issue-06-refine-ui-proposals`
+Status: done (2026-05-12 — see WORKLOG / ROADMAP §B6; 2 iterations: part 1 proposal-review + transcript-checked pill, part 2 before→after sanity panel + `assignments_before_json`)
+Type: AFK (scoped to stay under the 300-changed-line `review_ui.py` HITL-pause threshold; landed ≈150 lines across the two parts)
+Branch: `feat/issue-06-refine-ui-proposal-review`
 Spec: `PRD_PHASE_B.md` (modules 5–6 — "Refine UI"; the six slices §B6); `ROADMAP.md` §B
 User stories covered: 7, 8, 9, 10, 11
 

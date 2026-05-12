@@ -197,14 +197,33 @@ Steps 2–4 also have a UI: `serve-review-ui` → the **Refine** stage (4th
 stepper step). It shows the auto-picked sample (editable — remove rows, add
 by video ID/URL), a "Fetch transcripts & estimate" action, and a "Run
 refinement ($X.XX)" button (`--real` confirms with the dollar estimate;
-needs `RALPH_ALLOW_REAL_LLM=1` on the server). It polls to completion and
-reports the proposal count. The accept/reject screen for those proposals is
-issue B6 — until then accept/reject from the CLI / DB.
+needs `RALPH_ALLOW_REAL_LLM=1` on the server). It polls to completion, then
+renders, below the sample:
 
-Accepting a proposal creates the real `topics`/`subtopics` row. After accepting, re-run `discover`
-(taxonomy-aware once issue B4 lands) to spread the accepted nodes across
-the rest of the channel. `refinement_runs` rows are append-only like
-`discovery_runs`; a re-`refine` is non-destructive to earlier runs.
+- a **proposal-review screen** — every pending `taxonomy_proposal` grouped
+  by run (newest first; subtopics under their parent topic, then topics),
+  each card carrying the name / parent / transcript evidence / source
+  episode and an **Accept** / **Reject** button. Accept creates the real
+  `topics`/`subtopics` node (parent resolved through the rename log;
+  idempotent — re-accepting just ensures the node exists; a parent that no
+  longer exists is reported and the proposal marked rejected). Reject just
+  marks the row. Both refresh the screen in place.
+- a **before → after** sanity panel — per sampled episode, the topics
+  added / dropped and subtopics corrected vs. the metadata pass, plus the
+  full set of transcript-grade assignments with a "✗ wrong" control per
+  topic (reuses `/api/discovery/episode/mark-wrong`).
+- a **"re-run Discover"** nudge once you've accepted anything this session.
+
+Accepting a proposal creates the real `topics`/`subtopics` row. After
+accepting, re-run `discover` — it is taxonomy-aware (feeds the curated
+names into the prompt) and never downgrades a `refine`/`manual` assignment,
+so the re-run spreads the accepted nodes across the rest of the channel
+without touching the transcript-grade rows. `refine`-source episodes show a
+"transcript-checked" pill in the topic map. `refinement_runs` rows are
+append-only like `discovery_runs`; a re-`refine` is non-destructive to
+earlier runs.
+
+Operator runbook for a first real pass: `.scratch/phase-b-refinement/SMOKE.md`.
 
 ---
 
