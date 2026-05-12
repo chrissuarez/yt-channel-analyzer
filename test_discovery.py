@@ -8161,5 +8161,37 @@ class RefineRunEndpointTests(unittest.TestCase):
             self.assertIn("not found", json.loads(body)["error"].lower())
 
 
+class RefineStageHTMLTests(unittest.TestCase):
+    def test_html_page_has_refine_stepper_stage_and_panel(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn('data-stage="refine"', html)
+        self.assertIn('id="stage-refine"', html)
+        self.assertIn('id="refine-setup"', html)
+        self.assertIn(">Refine<", html)
+
+    def test_html_page_wires_refine_stage_js(self) -> None:
+        from yt_channel_analyzer.review_ui import ReviewUIApp
+
+        html = ReviewUIApp._render_html_page()
+        self.assertIn("'supply', 'discover', 'review', 'refine', 'consume'", html)
+        self.assertIn("function loadRefineSample", html)
+        self.assertIn("function renderRefine", html)
+        self.assertIn("/api/refine/sample", html)
+        self.assertIn("/api/refine/fetch-transcripts", html)
+        self.assertIn("/api/refine/status/", html)
+
+    def test_ui_revision_advances_for_refine_stage(self) -> None:
+        from yt_channel_analyzer.review_ui import UI_REVISION
+
+        self.assertIn("refine-stage", UI_REVISION)
+        # Earlier UI_REVISION substrings preserved.
+        self.assertIn("shorts-filter-badge", UI_REVISION)
+        self.assertIn("discover-cost", UI_REVISION)
+        self.assertIn("channel-overview", UI_REVISION)
+        self.assertIn("discovery", UI_REVISION)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -148,6 +148,8 @@ python3 -m yt_channel_analyzer.cli refine --db-path ./tmp/test.sqlite --project-
 RALPH_ALLOW_REAL_LLM=1 python3 -m yt_channel_analyzer.cli refine --db-path ./tmp/test.sqlite --project-name "My Project" --real         # add --yes to skip the prompt
 ```
 
+Or do it from the UI: `serve-review-ui` has a **Refine** stage (4th step in the stepper) — auto-picked sample table you can edit (remove rows / add by video ID or URL), a "Fetch transcripts & estimate" button, and a "Run refinement ($X.XX)" button (`--real`/`--stub` toggle; `--real` needs `RALPH_ALLOW_REAL_LLM=1` server-side and pops a confirm with the dollar estimate). It polls to completion and reports the proposal count; the accept/reject screen for those proposals is the next slice (B6).
+
 ### Inspect import
 
 ```bash

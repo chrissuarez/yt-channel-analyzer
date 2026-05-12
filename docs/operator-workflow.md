@@ -193,8 +193,15 @@ sqlite3 ./tmp/doac.sqlite \
   'SELECT kind, name, parent_topic_name, status FROM taxonomy_proposals ORDER BY id'
 ```
 
-Accepting a proposal creates the real `topics`/`subtopics` row (review-UI
-screens for this are issues B5/B6). After accepting, re-run `discover`
+Steps 2–4 also have a UI: `serve-review-ui` → the **Refine** stage (4th
+stepper step). It shows the auto-picked sample (editable — remove rows, add
+by video ID/URL), a "Fetch transcripts & estimate" action, and a "Run
+refinement ($X.XX)" button (`--real` confirms with the dollar estimate;
+needs `RALPH_ALLOW_REAL_LLM=1` on the server). It polls to completion and
+reports the proposal count. The accept/reject screen for those proposals is
+issue B6 — until then accept/reject from the CLI / DB.
+
+Accepting a proposal creates the real `topics`/`subtopics` row. After accepting, re-run `discover`
 (taxonomy-aware once issue B4 lands) to spread the accepted nodes across
 the rest of the channel. `refinement_runs` rows are append-only like
 `discovery_runs`; a re-`refine` is non-destructive to earlier runs.

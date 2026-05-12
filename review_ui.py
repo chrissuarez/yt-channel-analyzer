@@ -74,7 +74,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -1899,6 +1899,92 @@ HTML_PAGE = """<!doctype html>
       padding-top: 4px;
     }
 
+    /* ---------- Refine stage ---------- */
+    #refine-setup { display: block; }
+    .refine-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      margin-bottom: 18px;
+    }
+    .refine-sample-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: var(--body);
+      font-size: 14px;
+    }
+    .refine-sample-table th {
+      text-align: left;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--rule);
+    }
+    .refine-sample-table td {
+      padding: 10px;
+      border-bottom: 1px solid var(--rule);
+      vertical-align: top;
+    }
+    .refine-sample-table tr.is-dropped td { opacity: 0.45; }
+    .refine-slot {
+      font-family: var(--mono);
+      font-size: 10px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(15, 110, 86, 0.10);
+      color: var(--teal);
+    }
+    .refine-slot.blind_spot { background: rgba(216, 90, 48, 0.12); color: var(--coral); }
+    .refine-slot.added { background: var(--rule); color: var(--ink-soft); }
+    .refine-tstatus { font-family: var(--mono); font-size: 12px; }
+    .refine-tstatus.available { color: var(--teal); }
+    .refine-tstatus.missing { color: var(--ink-mute); }
+    .refine-row-rm {
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: var(--ink-mute);
+      font-size: 16px;
+      line-height: 1;
+    }
+    .refine-row-rm:hover { color: var(--coral); }
+    .refine-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-top: 20px;
+    }
+    .refine-actions input[type="text"] {
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      min-width: 280px;
+    }
+    .refine-actions .secondary {
+      padding: 9px 16px;
+      font-size: 13px;
+      border-radius: 6px;
+    }
+    .refine-note {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-soft);
+      margin-top: 12px;
+    }
+    .refine-note.warn { color: var(--coral); }
+    .refine-empty { color: var(--ink-soft); padding: 24px 0; }
+
     /* ---------- Consume stage ---------- */
     .consume-wrap {
       max-width: 1200px;
@@ -2176,6 +2262,13 @@ HTML_PAGE = """<!doctype html>
         <span class="sub" id="step-review-sub">curate the topic map</span>
       </span>
     </button>
+    <button class="step" type="button" data-stage="refine">
+      <span class="marker" aria-hidden="true"></span>
+      <span class="step-text">
+        <span class="label">Refine</span>
+        <span class="sub">transcript-grade sample</span>
+      </span>
+    </button>
     <button class="step" type="button" data-stage="consume">
       <span class="marker" aria-hidden="true"></span>
       <span class="step-text">
@@ -2189,7 +2282,7 @@ HTML_PAGE = """<!doctype html>
   <div class="wrap">
     <section class="review-toolbar">
       <div>
-        <div class="eyebrow">Review · stage 3 of 4</div>
+        <div class="eyebrow">Review · stage 3 of 5</div>
         <h1 class="title">The map of <em id="channel-display-name">your channel</em></h1>
         <p class="lede" id="review-lede">Loading channel data…</p>
       </div>
@@ -2337,7 +2430,7 @@ HTML_PAGE = """<!doctype html>
 
       <section class="supply-toolbar">
         <div>
-          <div class="eyebrow">Supply · stage 1 of 4</div>
+          <div class="eyebrow">Supply · stage 1 of 5</div>
           <h2 class="supply-h2">Videos</h2>
         </div>
         <div class="supply-toolbar-actions">
@@ -2354,7 +2447,7 @@ HTML_PAGE = """<!doctype html>
 
   <main class="stage-inner stage-panel" data-stage="discover" id="stage-discover" hidden>
     <div class="wrap">
-      <div class="eyebrow">Discover · stage 2 of 4</div>
+      <div class="eyebrow">Discover · stage 2 of 5</div>
       <h1 class="discover-h1">Topic discovery</h1>
       <p class="discover-lede">
         Ask a model to read every transcript and propose a topology of topics
@@ -2393,7 +2486,7 @@ HTML_PAGE = """<!doctype html>
       </aside>
 
       <section class="consume-main">
-        <div class="eyebrow">Consume · stage 4 of 4</div>
+        <div class="eyebrow">Consume · stage 5 of 5</div>
         <h1 class="consume-h1">Claims</h1>
         <p class="consume-lede">
           Specific assertions the model has lifted from transcripts, with a
@@ -2435,6 +2528,21 @@ HTML_PAGE = """<!doctype html>
     </div>
   </main>
 
+  <main class="stage-inner stage-panel" data-stage="refine" id="stage-refine" hidden>
+    <div class="wrap">
+      <div class="eyebrow">Refine · stage 4 of 5</div>
+      <h1 class="discover-h1">Refine the map from transcripts</h1>
+      <p class="discover-lede">
+        Pick a representative sample of episodes, fetch their transcripts, and
+        ask a model to re-judge each one from the full transcript. It returns
+        transcript-grade assignments plus proposals for new subtopics (and,
+        rarely, topics). Accept the proposals on the next screen, then re-run
+        Discover to spread them channel-wide.
+      </p>
+      <section id="refine-setup" class="discover-run-panel"></section>
+    </div>
+  </main>
+
   <div class="modal-backdrop" id="discover-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="discover-confirm-title" hidden>
     <div class="modal-card">
       <h3 id="discover-confirm-title">Run discovery</h3>
@@ -2471,7 +2579,7 @@ HTML_PAGE = """<!doctype html>
   </div>
 
   <script>
-    const STAGE_ORDER = ['supply', 'discover', 'review', 'consume'];
+    const STAGE_ORDER = ['supply', 'discover', 'review', 'refine', 'consume'];
 
     const state = {
       payload: null,
@@ -2484,6 +2592,19 @@ HTML_PAGE = """<!doctype html>
       supplyLimit: 50,
       activeDiscoveryRunId: null,
       discoverMode: 'real',
+      refine: {
+        loaded: false,
+        loading: false,
+        error: null,
+        discoveryRunId: null,
+        poolSize: null,
+        episodes: [],          // working set: {youtube_video_id, title, topic, confidence, transcript_status, slot_kind, available}
+        estimate: null,        // {n_available, estimated_cost_usd}
+        note: null,            // {text, warn}
+        mode: 'real',
+        running: false,
+        runResult: null,       // {refinement_run_id, status, n_proposals, error}
+      },
     };
 
     function setActiveStage(stage) {
@@ -2494,6 +2615,9 @@ HTML_PAGE = """<!doctype html>
         if (panel) panel.hidden = (s !== stage);
       });
       renderStepper();
+      if (stage === 'refine' && !state.refine.loaded && !state.refine.loading) {
+        loadRefineSample().catch((error) => setStatus(error.message, true));
+      }
     }
 
     function renderStepper() {
@@ -4037,6 +4161,7 @@ HTML_PAGE = """<!doctype html>
         }
         setStatus(`Discovery run ${runId} complete.`);
         state.activeDiscoveryRunId = runId;
+        state.refine.loaded = false;
         state.activeStage = 'review';
         state.focusedTopic = null;
         state.activeSubtopic = null;
@@ -4122,6 +4247,7 @@ HTML_PAGE = """<!doctype html>
 
     async function selectDiscoveryRun(runId) {
       state.activeDiscoveryRunId = runId;
+      state.refine.loaded = false;
       state.focusedTopic = null;
       state.activeSubtopic = null;
       setActiveStage('review');
@@ -4136,6 +4262,211 @@ HTML_PAGE = """<!doctype html>
       if (!payload) return;
       renderDiscoverRunPanel(payload);
       renderDiscoverHistory(payload);
+    }
+
+    // ---------- Refine stage ----------
+    function parseYoutubeId(raw) {
+      const s = String(raw || '').trim();
+      const m = s.match(/(?:v=|youtu\.be\/|\/shorts\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+      if (m) return m[1];
+      if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+      return null;
+    }
+
+    async function loadRefineSample() {
+      state.refine.loading = true;
+      state.refine.error = null;
+      renderRefine();
+      try {
+        const qs = state.activeDiscoveryRunId != null ? `?discovery_run_id=${encodeURIComponent(state.activeDiscoveryRunId)}` : '';
+        const res = await fetch('/api/refine/sample' + qs);
+        const payload = await res.json();
+        if (!res.ok) throw new Error(payload.error || 'Failed to load sample');
+        state.refine.discoveryRunId = payload.discovery_run_id;
+        state.refine.poolSize = payload.pool_size;
+        state.refine.episodes = (payload.episodes || []).map((e) => ({
+          youtube_video_id: e.youtube_video_id,
+          title: e.title || '(untitled)',
+          topic: e.topic || null,
+          confidence: e.confidence,
+          transcript_status: e.transcript_status || null,
+          slot_kind: e.slot_kind || 'coverage',
+          available: e.transcript_status === 'available',
+        }));
+        state.refine.estimate = null;
+        state.refine.note = null;
+        state.refine.runResult = null;
+        state.refine.loaded = true;
+      } catch (error) {
+        state.refine.error = error.message || 'Failed to load sample';
+      } finally {
+        state.refine.loading = false;
+        renderRefine();
+      }
+    }
+
+    function refineRemoveEpisode(ytId) {
+      state.refine.episodes = state.refine.episodes.filter((e) => e.youtube_video_id !== ytId);
+      state.refine.estimate = null;
+      renderRefine();
+    }
+
+    function refineAddEpisode() {
+      const input = document.getElementById('refine-add-input');
+      if (!input) return;
+      const ytId = parseYoutubeId(input.value);
+      if (!ytId) { setStatus('Could not parse a YouTube video ID from that.', true); return; }
+      if (state.refine.episodes.some((e) => e.youtube_video_id === ytId)) {
+        setStatus('Already in the sample.', true);
+        return;
+      }
+      state.refine.episodes.push({
+        youtube_video_id: ytId, title: '(added — fetch to confirm)', topic: null,
+        confidence: null, transcript_status: null, slot_kind: 'added', available: false,
+      });
+      input.value = '';
+      state.refine.estimate = null;
+      renderRefine();
+    }
+
+    async function refineFetchAndEstimate() {
+      const ids = state.refine.episodes.map((e) => e.youtube_video_id);
+      if (!ids.length) { setStatus('Sample is empty.', true); return; }
+      setStatus(`Fetching ${ids.length} transcript(s)…`);
+      state.refine.running = true; renderRefine();
+      try {
+        const resp = await postJson('/api/refine/fetch-transcripts', { video_ids: ids });
+        const byId = new Map((resp.episodes || []).map((e) => [e.youtube_video_id, e]));
+        const kept = [], dropped = [];
+        state.refine.episodes.forEach((e) => {
+          const upd = byId.get(e.youtube_video_id);
+          if (upd) { e.transcript_status = upd.transcript_status; e.available = !!upd.available; }
+          if (e.available) kept.push(e); else dropped.push(e.youtube_video_id);
+        });
+        state.refine.episodes = kept;
+        state.refine.estimate = { n_available: resp.n_available, estimated_cost_usd: resp.estimated_cost_usd };
+        state.refine.note = dropped.length
+          ? { text: `Dropped ${dropped.length} episode(s) with no available transcript: ${dropped.join(', ')}`, warn: true }
+          : { text: `${resp.n_available} transcript(s) available.`, warn: false };
+        setStatus(`${resp.n_available} transcript(s) available · est. $${Number(resp.estimated_cost_usd || 0).toFixed(4)}`);
+      } catch (error) {
+        setStatus(error.message || 'Fetch failed.', true);
+      } finally {
+        state.refine.running = false; renderRefine();
+      }
+    }
+
+    async function pollRefineStatus(runId) {
+      const intervalMs = 1500, capMs = 600000, start = Date.now();
+      while (true) {
+        const res = await fetch(`/api/refine/status/${runId}`);
+        const status = await res.json();
+        if (!res.ok) throw new Error(status.error || `status check failed (HTTP ${res.status})`);
+        if (status.status === 'success' || status.status === 'error') return status;
+        if (Date.now() - start > capMs) throw new Error(`refinement still running after ${capMs / 1000}s — check the server log`);
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    }
+
+    async function refineRun() {
+      const ids = state.refine.episodes.map((e) => e.youtube_video_id);
+      if (!ids.length) { setStatus('Sample is empty.', true); return; }
+      const mode = state.refine.mode === 'stub' ? 'stub' : 'real';
+      if (mode === 'real' && state.refine.estimate
+          && !window.confirm(`Run --real refinement over ${ids.length} episode(s)? Estimated cost $${Number(state.refine.estimate.estimated_cost_usd || 0).toFixed(4)}. This bills the Anthropic API.`)) {
+        return;
+      }
+      state.refine.running = true; state.refine.runResult = null; renderRefine();
+      setStatus(`Starting ${mode} refinement run over ${ids.length} episode(s)…`);
+      try {
+        const startResp = await postJson('/api/refine', { mode, video_ids: ids, discovery_run_id: state.refine.discoveryRunId });
+        const runId = startResp.refinement_run_id;
+        setStatus(`Refinement run ${runId} started — polling…`);
+        const finalStatus = await pollRefineStatus(runId);
+        state.refine.runResult = {
+          refinement_run_id: runId,
+          status: finalStatus.status,
+          n_proposals: finalStatus.n_proposals,
+          error: finalStatus.error || null,
+        };
+        if (finalStatus.status === 'error') setStatus(finalStatus.error || `Refinement run ${runId} errored.`, true);
+        else setStatus(`Refinement run ${runId} complete — ${finalStatus.n_proposals} proposal(s).`);
+      } catch (error) {
+        setStatus(error.message || 'Refinement failed.', true);
+      } finally {
+        state.refine.running = false; renderRefine();
+      }
+    }
+
+    function setRefineMode(mode) {
+      state.refine.mode = mode === 'stub' ? 'stub' : 'real';
+      renderRefine();
+    }
+
+    function refineStatusHtml(ep) {
+      const st = ep.transcript_status;
+      if (st === 'available') return '<span class="refine-tstatus available">transcript ready</span>';
+      if (!st) return '<span class="refine-tstatus missing">not fetched</span>';
+      return `<span class="refine-tstatus missing">${escapeHtml(st)}</span>`;
+    }
+
+    function renderRefine() {
+      const host = document.getElementById('refine-setup');
+      if (!host) return;
+      const r = state.refine;
+      if (r.loading) { host.innerHTML = '<p class="refine-empty">Loading the auto-picked sample…</p>'; return; }
+      if (r.error) {
+        const hint = /discover/i.test(r.error)
+          ? ' <button class="secondary" onclick="setActiveStage(\\'discover\\')">Go to Discover →</button>'
+          : '';
+        host.innerHTML = `<p class="refine-note warn">${escapeHtml(r.error)}</p><p>${hint}</p>`;
+        return;
+      }
+      if (!r.loaded) { host.innerHTML = '<p class="refine-empty">Open this stage to load the sample.</p>'; return; }
+      const eps = r.episodes;
+      const realOn = r.mode === 'real';
+      const estLabel = r.estimate ? `$${Number(r.estimate.estimated_cost_usd || 0).toFixed(4)}` : '—';
+      const canRun = !!r.estimate && r.estimate.n_available > 0 && !r.running;
+      const rows = eps.length ? eps.map((ep) => `
+        <tr>
+          <td>${escapeHtml(ep.title)}<br><span class="mono small soft">${escapeHtml(ep.youtube_video_id)}</span></td>
+          <td>${ep.topic ? escapeHtml(ep.topic) : '<span class="soft">— blind spot</span>'}</td>
+          <td class="mono">${ep.confidence == null ? '—' : Number(ep.confidence).toFixed(2)}</td>
+          <td>${refineStatusHtml(ep)}</td>
+          <td><span class="refine-slot ${escapeHtml(ep.slot_kind)}">${escapeHtml(String(ep.slot_kind || '').replace('_', ' '))}</span></td>
+          <td><button class="refine-row-rm" title="Remove" onclick="refineRemoveEpisode('${escapeHtml(ep.youtube_video_id)}')">✕</button></td>
+        </tr>`).join('') : '<tr><td colspan="6" class="refine-empty">Sample is empty — add episodes by ID below.</td></tr>';
+      const noteHtml = r.note ? `<p class="refine-note ${r.note.warn ? 'warn' : ''}">${escapeHtml(r.note.text)}</p>` : '';
+      const runResultHtml = r.runResult ? (
+        r.runResult.status === 'error'
+          ? `<p class="refine-note warn">Run #${r.runResult.refinement_run_id} errored: ${escapeHtml(r.runResult.error || '')}</p>`
+          : `<p class="refine-note">Run #${r.runResult.refinement_run_id} complete — ${escapeHtml(r.runResult.n_proposals)} taxonomy proposal(s). The proposal-review screen lands in the next slice (B6); until then accept/reject from the CLI.</p>`
+      ) : '';
+      host.innerHTML = `
+        <div class="refine-meta">
+          <span>Discovery run <strong>#${escapeHtml(r.discoveryRunId)}</strong></span>
+          <span>Candidate pool <strong>${escapeHtml(r.poolSize)}</strong></span>
+          <span>Sample <strong>${eps.length}</strong> episode(s)</span>
+          <span>Estimate <strong>${estLabel}</strong></span>
+        </div>
+        <table class="refine-sample-table">
+          <thead><tr><th>Episode</th><th>Covers topic</th><th>Conf.</th><th>Transcript</th><th>Slot</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${noteHtml}
+        <div class="refine-actions">
+          <input type="text" id="refine-add-input" placeholder="add by video ID or URL" />
+          <button class="secondary" onclick="refineAddEpisode()">Add</button>
+          <button class="secondary" onclick="refineFetchAndEstimate()" ${r.running ? 'disabled' : ''}>Fetch transcripts &amp; estimate</button>
+          <span class="div"></span>
+          <div class="discover-mode-toggle" role="tablist" aria-label="Refinement mode">
+            <button type="button" class="opt ${realOn ? 'on' : ''}" data-mode="real" role="tab" aria-selected="${realOn}" onclick="setRefineMode('real')">--real</button>
+            <button type="button" class="opt ${realOn ? '' : 'on'}" data-mode="stub" role="tab" aria-selected="${!realOn}" onclick="setRefineMode('stub')">--stub</button>
+          </div>
+          <button class="discover-run-action" onclick="refineRun()" ${canRun ? '' : 'disabled'}>Run refinement (${estLabel})</button>
+        </div>
+        ${runResultHtml}
+      `;
     }
 
     function renderConsume(payload) {
@@ -4176,6 +4507,7 @@ HTML_PAGE = """<!doctype html>
       renderApprovedComparisonGroups(payload.comparison_reviews.approved_groups);
       renderSupply(payload);
       renderDiscover(payload);
+      renderRefine();
       renderConsume(payload);
       renderStepper();
     }
