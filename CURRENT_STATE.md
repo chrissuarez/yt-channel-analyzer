@@ -22,6 +22,8 @@ See `PROJECT_SUMMARY.md` for the full restated vision and `ROADMAP.md` for the p
 
 **Phase A is complete** as of 2026-05-08. All 11 slices (02 real-LLM machinery, 03 subtopics, 04 confidence/reason, §A4 legacy move, §A5 docs + paid DOAC run, 05 multi-topic, 07 wrong_assignments, 08 sticky curation, 09 low-confidence threshold, 11 channel overview, 12 run-id demote, 13 comparison readiness) have merged. Sticky-curation 3/3 paths (rename replay, wrong-topic suppression, wrong-subtopic suppression) validated end-to-end on real DOAC data 2026-05-09. CLI `--real` flag (issue 02b) merged 2026-05-08; `make_real_llm_callable()` is gated by `RALPH_ALLOW_REAL_LLM=1` and writes audit rows with tokens + cost (`extractor/pricing.py`).
 
+**Phase B ("sample-based transcript refinement") is complete** as of 2026-05-12. All 6 slices on `main` (B1 `fetch-transcripts` CLI, B2 refinement schema + db helpers, B3 `refinement.py` core + `refine --stub/--real` CLI, B4 taxonomy-aware discovery prompt + never-downgrade `refine`/`manual` rows, B5 Refine UI sample-setup screen, B6 Refine UI proposal-review + before→after sanity panel). New tables `refinement_runs` / `refinement_episodes` / `taxonomy_proposals`; `assignment_source='refine'` + nullable `refinement_run_id` on the junction tables; new "Refine" stepper stage with `/api/refine*` endpoints (sample, fetch-transcripts+estimate, async run+poll, proposal accept/reject). Verify gate 369 green. **Not yet exercised against real DOAC data** — the paid operator runbook is `.scratch/phase-b-refinement/SMOKE.md`.
+
 A Claude-Design-driven reskin and structural rebuild of `review_ui.py` landed across 2026-05-09/10 (16 commits): paper/ink/teal palette, topbar + 4-stage stepper, Supply / Discover / Consume stage pages, Review canvas with overview minimap + focused topic canvas, real Run-discovery button (`POST /api/discover`), Re-ingest, Edit channel form, Discover-row → Review, Supply pagination, Discover cost column, and stream/poll for in-flight discovery runs (async daemon thread + `GET /api/discovery_runs/<id>` polled every 1.5s).
 
 The strategy is **retrofit in place**, not greenfield — most of the existing ~600KB of code (ingestion, schema, review UI, topic suggestion machinery) carries over with repurposed semantics.
@@ -58,7 +60,11 @@ The strategy is **retrofit in place**, not greenfield — most of the existing ~
 
 ## Current build focus
 
-Phase A is shipped and validated on real DOAC data. The **shorts filter** feature is complete (3/3 slices merged to main 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length). **Phase B ("sample-based transcript refinement") is designed and sliced** — `PRD_PHASE_B.md`, `ROADMAP.md` §B, and 6 issue files in `.scratch/phase-b-refinement/issues/` are committed on branch `docs/phase-b-prd` (not yet merged); design walked via /grill-me, frozen. See the 2026-05-11 WORKLOG entry. **Next moves:** merge `docs/phase-b-prd` → main; then start `feat/issue-01-fetch-transcripts` off main (recommended first execution step: a fresh `discover --real` on DOAC now that the Shorts default is on, so refinement samples a clean non-Short run).
+Phase A and Phase B are both shipped. Phase A is validated on real DOAC data; **Phase B is code-complete (gate 369 green) but not yet exercised against real DOAC data.** The **shorts filter** feature is complete (3/3 slices merged 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length).
+
+**Next moves:**
+1. **Real DOAC operator pass through Phase B** — follow `.scratch/phase-b-refinement/SMOKE.md`: fresh `discover --real` on DOAC (Shorts default on → clean non-Short run) → Refine stage in the UI (sample → fetch transcripts → cost confirm (~$0.40/15 ep) → run → proposal review + before→after sanity panel → accept proposals) → re-run `discover --real` to spread accepted nodes channel-wide without downgrading the `refine` rows. Paid; needs `RALPH_ALLOW_REAL_LLM=1`.
+2. **Scope Phase C** — claim extraction / embeddings / clustering / synthesis. No PRD or slice breakdown yet (unlike Phase A/B). `~$8` one-time backlog spend for a DOAC-sized channel. Do (1) and live with the result before committing to (2).
 
 Smaller open threads still on the polish list:
 
@@ -76,8 +82,8 @@ Beyond these, longer-tail items worth flagging when they bite:
 ### 1. Existing code carries old conceptual baggage
 Tables, columns, and modules related to comparison groups still exist. They are being moved to `legacy/`, not deleted, in case Phase C reveals we want pieces back. Carry the baggage; don't pay for a rewrite of working plumbing.
 
-### 2. Phase C is tempting; Phase A first
-The exciting parts (consensus / conflict / advice extraction, Q&A) live in Phase C/D. The discipline is: ship Phase A and live with it for a while before committing the ~$8 backlog spend and the bigger build of Phase C. Phase A may already be enough; we won't know until we use it.
+### 2. Phase C is tempting; live with A+B first
+The exciting parts (consensus / conflict / advice extraction, Q&A) live in Phase C/D. Phase A and Phase B are now both built. The discipline is: do the real DOAC operator pass through Phase B, live with the refined topic map for a while, *then* commit the ~$8 backlog spend and the bigger build of Phase C. A+B may already be enough; we won't know until we use them on real data.
 
 ### 3. Multi-topic episodes affect the schema
 Episodes can belong to many topics with confidence scores. Existing schema has primary + optional secondary topic — that needs extending (junction table) before MVP can ship cleanly. This is the first real schema change.
@@ -90,7 +96,7 @@ Auto-discovered assignments must show *why* an episode landed where it did (matc
 ## Best next-step questions when resuming
 
 1. Have any new $-affecting LLM bugs surfaced in the latest WORKLOG entry that aren't yet in the open-threads list?
-2. Has Phase B/C been scoped yet, or is the focus still Phase A polish slices?
+2. Has the real DOAC operator pass through Phase B happened yet (per `.scratch/phase-b-refinement/SMOKE.md`)? Has Phase C been scoped (PRD + slices) yet?
 3. Is the dev server still bound to a stale `tmp/*.sqlite` from a previous session, or has the user switched DBs?
 
 ---
@@ -105,7 +111,7 @@ When restarting work:
    - `ROADMAP.md`
    - `PRD_PHASE_A_TOPIC_MAP.md`
    - `WORKLOG.md` (most recent entries)
-2. Identify the current Phase A build slice in progress.
+2. Identify the current focus: Phase A + B are both shipped; the open item is the real DOAC operator pass through Phase B, then scoping Phase C.
 3. Verify the relevant workflow locally before changing it.
 4. Make the smallest useful change.
 5. Test the affected workflow.
@@ -114,6 +120,11 @@ When restarting work:
 ---
 
 ## Change log notes
+
+### 2026-05-12 — Phase B complete (sample-based transcript refinement)
+- All 6 Phase B slices on `main` (`764a71a`): B1 `fetch-transcripts` CLI + non-legacy fetch path (`youtube.stub_transcript_fetcher`, `db.list_primary_channel_transcript_status`); B2 `refinement_runs` / `refinement_episodes` / `taxonomy_proposals` tables + `assignment_source='refine'` + `refinement_run_id` on the junction tables (CHECK-rebuild repair `_repair_video_topic_refine_source_constraint` + additive columns) + db helpers; B3 `refinement.py` core (`run_refinement` 3-stage: resolve+pool+pick → fetch transcripts → create-run+batch+persist; ⅔-coverage/⅓-blind-spot picker; `refinement.transcript@refinement-v1` extractor prompt; `stub_refinement_llm`; `make_real_refinement_llm_callable` gated by `RALPH_ALLOW_REAL_LLM=1`) + `refine --stub|--real [--yes]` CLI with pre-flight cost confirm; B4 taxonomy-aware discovery prompt (`DISCOVERY_PROMPT_VERSION` → `discovery-v5`, curated topic/subtopic names fed in) + `run_discovery` `ON CONFLICT` never downgrades `refine`/`manual` rows; B5 new "Refine" stepper stage + sample-setup screen (`GET /api/refine/sample`, `POST /api/refine/fetch-transcripts`, `POST /api/refine` daemon-thread, `GET /api/refine/status/<id>`); B6 proposal-review screen (`db.list_pending_taxonomy_proposals`, `POST /api/refine/proposal/{accept,reject}`, before→after sanity panel via `db.list_refinement_episode_changes` + `refinement_episodes.assignments_before_json`, "transcript-checked" pill on `refine`-source episode cards, re-run-Discover nudge).
+- Verify gate **369 green**. Cheatsheet §2 + `docs/operator-workflow.md` Phase B section + `.scratch/phase-b-refinement/SMOKE.md` (real DOAC runbook) all current.
+- **Not yet exercised against real DOAC data.** Next: the paid operator pass per `SMOKE.md` (fresh `discover --real` → Refine stage → accept proposals → `discover --real` re-run), then scope Phase C.
 
 ### 2026-05-08 — Phase A complete
 - All 11 Phase A slices merged into `main`. Ralph harness validated: AFK runs (3 iterations × multiple slices) + HITL pacing for paid-LLM and design slices.

@@ -27,6 +27,17 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — B6 merged to main + planning docs synced
+
+### Done
+- FF-merged `feat/issue-06-refine-ui-proposal-review` (`7a4bb03`, `764a71a`) → `main`; pushed to `origin/main` (`b73c6c9..764a71a`); deleted the local branch. No `.ralph/issues/` overlays existed. Verify gate **369 green** on main.
+- **Phase B (B1–B6) is now entirely on `main`.** Synced planning docs to match: `ROADMAP.md` (Phase B marked ✅ complete, Phase C marked ← next active phase / not-yet-scoped), `CURRENT_STATE.md` (intro + Current build focus rewritten; tension #2 reworded; new `### 2026-05-12 — Phase B complete` changelog entry; resume checklist/questions updated). `PROJECT_SUMMARY.md` left as-is (vision doc, still accurate). `WORKLOG.md`/`YT_ANALYZER_CHEATSHEET.md`/`docs/operator-workflow.md`/`.scratch/phase-b-refinement/SMOKE.md` were already current from the B6 commits.
+
+### Next
+- Real DOAC operator pass through Phase B per `.scratch/phase-b-refinement/SMOKE.md` (paid; `RALPH_ALLOW_REAL_LLM=1`). Then scope Phase C (PRD + slices).
+
+---
+
 ## 2026-05-12 — Phase B slice 6: Refine UI proposal-review screen + before→after panel (Phase B complete)
 
 ### Done
