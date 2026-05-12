@@ -7563,5 +7563,296 @@ class ShortsFilterBadgeHtmlTests(unittest.TestCase):
         self.assertIn("shorts_filter_badge", HTML_PAGE)
 
 
+class DiscoveryTaxonomyAwarenessRenderTests(_RegistryIsolation):
+    def test_render_includes_curated_taxonomy_block_when_present(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+
+        prompt = register_discovery_prompt()
+        rendered = prompt.render(
+            {
+                "videos": [
+                    {
+                        "youtube_video_id": "vidA",
+                        "title": "Sleep and the brain",
+                        "description": None,
+                        "chapters": [],
+                    },
+                ],
+                "taxonomy": [
+                    {"topic": "Wellbeing", "subtopics": ["Sleep", "Stress"]},
+                    {"topic": "Career", "subtopics": []},
+                ],
+            }
+        )
+        self.assertIn("Taxonomy already curated", rendered)
+        self.assertIn("Wellbeing", rendered)
+        self.assertIn("Sleep", rendered)
+        self.assertIn("Stress", rendered)
+        self.assertIn("Career", rendered)
+
+    def test_render_omits_taxonomy_block_when_absent_or_empty(self) -> None:
+        from yt_channel_analyzer.discovery import register_discovery_prompt
+
+        prompt = register_discovery_prompt()
+        base_video = {
+            "youtube_video_id": "vidA",
+            "title": "Sleep and the brain",
+            "description": None,
+            "chapters": [],
+        }
+        for context in ({"videos": [base_video]}, {"videos": [base_video], "taxonomy": []}):
+            rendered = prompt.render(context)
+            self.assertNotIn("Taxonomy already curated", rendered)
+
+
+class DiscoveryRerunTaxonomyAwarenessTests(unittest.TestCase):
+    def test_rerun_passes_current_curated_taxonomy_to_llm(self) -> None:
+        from yt_channel_analyzer.discovery import STUB_SUBTOPIC_NAME, STUB_TOPIC_NAME
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+            seen: dict[str, object] = {}
+
+            def spy_llm(videos, *, correlation_id=None, taxonomy=None):
+                seen["taxonomy"] = taxonomy
+                return stub_llm(videos, correlation_id=correlation_id)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=spy_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+
+        taxonomy = seen["taxonomy"]
+        self.assertIsNotNone(taxonomy)
+        topics_seen = {entry["topic"] for entry in taxonomy}
+        self.assertIn(STUB_TOPIC_NAME, topics_seen)
+        wellbeing = next(e for e in taxonomy if e["topic"] == STUB_TOPIC_NAME)
+        self.assertIn(STUB_SUBTOPIC_NAME, wellbeing["subtopics"])
+
+    def test_first_run_passes_empty_taxonomy(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+
+            seen: dict[str, object] = {}
+
+            def spy_llm(videos, *, correlation_id=None, taxonomy=None):
+                seen["taxonomy"] = taxonomy
+                return stub_llm(videos, correlation_id=correlation_id)
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=spy_llm,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+        self.assertEqual(seen["taxonomy"], [])
+
+
+class DiscoveryNeverDowngradeRefineTests(unittest.TestCase):
+    def _ids(self, conn, *, yt_id, topic_name):
+        conn.row_factory = sqlite3.Row
+        return conn.execute(
+            """
+            SELECT vt.video_id, vt.topic_id
+            FROM video_topics vt
+            JOIN videos v ON v.id = vt.video_id
+            JOIN topics t ON t.id = vt.topic_id
+            WHERE v.youtube_video_id = ? AND t.name = ?
+            """,
+            (yt_id, topic_name),
+        ).fetchone()
+
+    def _stamp_source(self, db_path, *, yt_id, topic_name, source, confidence, reason):
+        with connect(db_path) as conn:
+            row = self._ids(conn, yt_id=yt_id, topic_name=topic_name)
+            conn.execute(
+                """
+                UPDATE video_topics SET assignment_source = ?, confidence = ?, reason = ?
+                WHERE video_id = ? AND topic_id = ?
+                """,
+                (source, confidence, reason, row["video_id"], row["topic_id"]),
+            )
+            # Mirror onto the subtopic row stub_llm wrote (vid1 -> General/General sub).
+            sub_row = conn.execute(
+                """
+                SELECT vs.video_id, vs.subtopic_id
+                FROM video_subtopics vs
+                JOIN videos v ON v.id = vs.video_id
+                JOIN subtopics s ON s.id = vs.subtopic_id
+                WHERE v.youtube_video_id = ? AND s.topic_id = ?
+                """,
+                (yt_id, row["topic_id"]),
+            ).fetchone()
+            if sub_row is not None:
+                conn.execute(
+                    """
+                    UPDATE video_subtopics SET assignment_source = ?, confidence = ?, reason = ?
+                    WHERE video_id = ? AND subtopic_id = ?
+                    """,
+                    (source, confidence, reason, sub_row[0], sub_row[1]),
+                )
+            conn.commit()
+
+    def _read_source(self, db_path, *, yt_id, topic_name):
+        with connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                """
+                SELECT vt.assignment_source AS source, vt.confidence AS confidence,
+                       vt.reason AS reason
+                FROM video_topics vt
+                JOIN videos v ON v.id = vt.video_id
+                JOIN topics t ON t.id = vt.topic_id
+                WHERE v.youtube_video_id = ? AND t.name = ?
+                """,
+                (yt_id, topic_name),
+            ).fetchone()
+
+    def _rerun(self, db_path):
+        run_discovery(
+            db_path,
+            project_name="proj",
+            llm=stub_llm,
+            model="stub",
+            prompt_version="stub-v0",
+        )
+
+    def test_refine_row_keeps_source_confidence_reason_after_rerun(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            self._rerun(db_path)
+            self._stamp_source(
+                db_path,
+                yt_id="vid1",
+                topic_name="General",
+                source="refine",
+                confidence=0.95,
+                reason="transcript-grade reassignment",
+            )
+            # stub_llm re-proposes (vid1, General) with confidence 1.0 / "stub assignment".
+            self._rerun(db_path)
+            row = self._read_source(db_path, yt_id="vid1", topic_name="General")
+            self.assertEqual(row["source"], "refine")
+            self.assertAlmostEqual(row["confidence"], 0.95)
+            self.assertEqual(row["reason"], "transcript-grade reassignment")
+
+            with connect(db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                sub = conn.execute(
+                    """
+                    SELECT vs.assignment_source AS source, vs.confidence AS confidence
+                    FROM video_subtopics vs
+                    JOIN videos v ON v.id = vs.video_id
+                    JOIN subtopics s ON s.id = vs.subtopic_id
+                    JOIN topics t ON t.id = s.topic_id
+                    WHERE v.youtube_video_id = 'vid1' AND t.name = 'General'
+                    """
+                ).fetchone()
+            self.assertEqual(sub["source"], "refine")
+            self.assertAlmostEqual(sub["confidence"], 0.95)
+
+    def test_manual_row_keeps_source_confidence_reason_after_rerun(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            self._rerun(db_path)
+            self._stamp_source(
+                db_path,
+                yt_id="vid1",
+                topic_name="General",
+                source="manual",
+                confidence=0.5,
+                reason="operator override",
+            )
+            self._rerun(db_path)
+            row = self._read_source(db_path, yt_id="vid1", topic_name="General")
+            self.assertEqual(row["source"], "manual")
+            self.assertAlmostEqual(row["confidence"], 0.5)
+            self.assertEqual(row["reason"], "operator override")
+
+    def test_rerun_still_inserts_auto_row_for_new_pair(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            self._rerun(db_path)
+            self._stamp_source(
+                db_path,
+                yt_id="vid1",
+                topic_name="General",
+                source="refine",
+                confidence=0.95,
+                reason="transcript-grade reassignment",
+            )
+
+            def stub_with_new_topic(videos, *, correlation_id=None, taxonomy=None):
+                payload = stub_llm(videos, correlation_id=correlation_id)
+                return DiscoveryPayload(
+                    topics=[*payload.topics, "FreshTopic"],
+                    subtopics=payload.subtopics,
+                    assignments=[
+                        *payload.assignments,
+                        DiscoveryAssignment(
+                            youtube_video_id="vid2",
+                            topic_name="FreshTopic",
+                            confidence=0.7,
+                            reason="brand new theme",
+                        ),
+                    ],
+                )
+
+            run_discovery(
+                db_path,
+                project_name="proj",
+                llm=stub_with_new_topic,
+                model="stub",
+                prompt_version="stub-v0",
+            )
+            fresh = self._read_source(db_path, yt_id="vid2", topic_name="FreshTopic")
+            self.assertEqual(fresh["source"], "auto")
+            # The refine row is still protected alongside.
+            kept = self._read_source(db_path, yt_id="vid1", topic_name="General")
+            self.assertEqual(kept["source"], "refine")
+
+    def test_wrong_mark_still_suppresses_refine_row_on_rerun(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.sqlite3"
+            _seed_channel_with_videos(db_path)
+            self._rerun(db_path)
+            self._stamp_source(
+                db_path,
+                yt_id="vid1",
+                topic_name="General",
+                source="refine",
+                confidence=0.95,
+                reason="transcript-grade reassignment",
+            )
+            mark_assignment_wrong(
+                db_path,
+                project_name="proj",
+                topic_name="General",
+                youtube_video_id="vid1",
+            )
+            self._rerun(db_path)
+            self.assertIsNone(
+                self._read_source(db_path, yt_id="vid1", topic_name="General")
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

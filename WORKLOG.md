@@ -27,6 +27,24 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — Phase B slice 4: discovery prompt taxonomy awareness + never-downgrade
+
+### Done
+- Merged B3 (`feat/issue-03-refinement-core-and-cli`) → `main` (FF; deleted branch; gate 334 green pre-merge). Branched `feat/issue-04-discover-taxonomy-aware` off `main`.
+- `discovery.py`: `DISCOVERY_PROMPT_VERSION` → `discovery-v5`. `_render_discovery_prompt` now emits a "Taxonomy already curated for this channel — reuse these exact names …" block listing topics + their subtopics from `context["taxonomy"]` (skipped when absent/empty). `_DISCOVERY_SYSTEM` gains a matching rule. `run_discovery` loads the project's current `topics` + `subtopics` (already rename-resolved — `rename_topic` updates `topics.name`) into `taxonomy: list[{"topic", "subtopics"}]` and threads it through `_call_llm_with_optional_correlation`, which now passes a `taxonomy` kwarg too (same opt-in-by-signature shape as `correlation_id`, so bare `def f(_videos)` test fixtures are unaffected). `discovery_llm_via_extractor.call` accepts `taxonomy` and puts it in the extractor context; `stub_llm` accepts + ignores it (stays deterministic).
+- Never-downgrade: both `video_topics` and `video_subtopics` `ON CONFLICT … DO UPDATE SET` now wrap `assignment_source` / `confidence` / `reason` in `CASE WHEN <table>.assignment_source IN ('refine','manual') THEN <existing> ELSE excluded.… END`. `discovery_run_id` is still updated unconditionally — so a re-proposed (video, topic) pair of any source still falls under `_suppress_wrong_assignments_in_run` for the current run, and brand-new pairs still INSERT as `'auto'`.
+- 8 new tests in `test_discovery.py` (`DiscoveryTaxonomyAwarenessRenderTests`, `DiscoveryRerunTaxonomyAwarenessTests`, `DiscoveryNeverDowngradeRefineTests`): render block present/absent; a re-run gets the curated topics+subtopics, a first run gets `[]`; `refine` and `manual` `video_topics`/`video_subtopics` rows keep source+confidence+reason after a re-run that re-proposes the pair; a brand-new topic/pair from a re-run is inserted `'auto'`; a wrong-marked `refine` row is still suppressed on re-run. Gate **342 green**. `test_transcripts.py` untouched.
+- ROADMAP §B4 ticked; issue file 04 marked DONE. No schema / CLI / cheatsheet change.
+
+### Learned
+- `topics.name` is the live curated name (`db.rename_topic` does `UPDATE topics SET name = …` *and* logs to `topic_renames`), so feeding `topics`/`subtopics` straight into the prompt is already rename-resolved — no need to replay `topic_renames` for the prompt block (the `_apply_renames_to_payload` replay is still needed for the *incoming* LLM payload, which may use stale names).
+- In SQLite `ON CONFLICT … DO UPDATE SET`, an unqualified or `tablename.`-qualified column on the RHS reads the *original* row; `excluded.` reads the would-be-inserted row. So `assignment_source = CASE WHEN video_topics.assignment_source IN (…) THEN video_topics.assignment_source ELSE excluded.assignment_source END` is the clean way to express "don't downgrade".
+
+### Next
+- B5 → B6 (Refine UI: sample-setup screen, then proposal-review screen) — split for the 300-changed-line `review_ui.py` HITL pause. Recommended operator step before a real `refine`: a fresh `discover --real` on DOAC (clean non-Short run), then `fetch-transcripts` for the sample, then `refine --real`; after accepting proposals, a `discover` re-run now spreads the accepted nodes channel-wide (and won't downgrade the refine rows).
+
+---
+
 ## 2026-05-12 — Phase B slice 3: `refinement.py` core + `refine` CLI
 
 ### Done

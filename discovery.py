@@ -210,7 +210,7 @@ STUB_PROMPT_VERSION = "stub-v0"
 
 
 DISCOVERY_PROMPT_NAME = "discovery.topics"
-DISCOVERY_PROMPT_VERSION = "discovery-v4"
+DISCOVERY_PROMPT_VERSION = "discovery-v5"
 
 
 _DISCOVERY_SYSTEM = (
@@ -246,6 +246,9 @@ _DISCOVERY_SYSTEM = (
     "reflecting how strongly the episode fits the topic, and a short "
     "`reason` string (e.g. \"title contains 'sleep'\", \"matched chapter "
     "title 'Gut Microbiome'\") explaining the placement.\n"
+    "- If a \"taxonomy already curated\" block is supplied, reuse those exact "
+    "topic and subtopic names for episodes that fit them; only introduce a "
+    "new name when an episode covers a genuinely new theme not in the list.\n"
     "- Output JSON only — no prose, no markdown fences."
 )
 
@@ -306,6 +309,18 @@ def _render_discovery_prompt(context: dict) -> str:
         f"Episodes ({len(videos)} total). Identify broad topics and assign each.",
         "",
     ]
+    taxonomy = context.get("taxonomy") or []
+    if taxonomy:
+        lines.append(
+            "Taxonomy already curated for this channel — reuse these exact "
+            "names where an episode fits one; you may also propose new "
+            "topics/subtopics for genuinely new themes:"
+        )
+        for entry in taxonomy:
+            lines.append(f"- {entry['topic']}")
+            for sub in entry.get("subtopics", []) or []:
+                lines.append(f"  - {sub}")
+        lines.append("")
     for idx, video in enumerate(videos, start=1):
         lines.append(f"--- Episode {idx} ---")
         lines.append(f"id: {video['youtube_video_id']}")
@@ -377,22 +392,31 @@ def _call_llm_with_optional_correlation(
     llm: "LLMCallable",
     videos: Sequence[DiscoveryVideo],
     correlation_id: int,
+    taxonomy: list[dict] | None = None,
 ) -> "DiscoveryPayload":
-    """Pass ``correlation_id`` only when the callable accepts it.
+    """Pass ``correlation_id`` / ``taxonomy`` only when the callable accepts them.
 
     Test fixtures throughout the suite use bare ``def f(_videos): ...`` lambdas;
-    the real adapter (`discovery_llm_via_extractor`) and ``stub_llm`` accept
-    the kwarg. Detecting per-call keeps both shapes working without forcing
-    every fixture to carry a no-op ``**kwargs``.
+    the real adapter (`discovery_llm_via_extractor`) and ``stub_llm`` accept the
+    kwargs. Detecting per-call keeps both shapes working without forcing every
+    fixture to carry a no-op ``**kwargs``. ``taxonomy`` is the channel's
+    current curated topic/subtopic names so a re-run reuses them (issue B4).
     """
     try:
         sig = inspect.signature(llm)
     except (TypeError, ValueError):
         return llm(videos)
-    for param in sig.parameters.values():
-        if param.name == "correlation_id" or param.kind is inspect.Parameter.VAR_KEYWORD:
-            return llm(videos, correlation_id=correlation_id)
-    return llm(videos)
+    has_var_kw = any(
+        param.kind is inspect.Parameter.VAR_KEYWORD
+        for param in sig.parameters.values()
+    )
+    param_names = {param.name for param in sig.parameters.values()}
+    kwargs: dict[str, Any] = {}
+    if has_var_kw or "correlation_id" in param_names:
+        kwargs["correlation_id"] = correlation_id
+    if has_var_kw or "taxonomy" in param_names:
+        kwargs["taxonomy"] = taxonomy
+    return llm(videos, **kwargs)
 
 
 def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
@@ -408,8 +432,11 @@ def discovery_llm_via_extractor(extractor: Any) -> "LLMCallable":
         videos: Sequence[DiscoveryVideo],
         *,
         correlation_id: int | None = None,
+        taxonomy: list[dict] | None = None,
     ) -> DiscoveryPayload:
         context = _videos_to_context(videos)
+        if taxonomy:
+            context["taxonomy"] = taxonomy
         result = extractor.run_one(
             DISCOVERY_PROMPT_NAME,
             DISCOVERY_PROMPT_VERSION,
@@ -455,6 +482,7 @@ def stub_llm(
     videos: Sequence[DiscoveryVideo],
     *,
     correlation_id: int | None = None,
+    taxonomy: list[dict] | None = None,
 ) -> DiscoveryPayload:
     """Hardcoded LLM stub: every video gets a primary-topic assignment, and
     the first video carries a second assignment under a secondary topic so
@@ -462,8 +490,10 @@ def stub_llm(
 
     Accepts ``correlation_id`` to match the post-2026-05-10 ``LLMCallable``
     convention (``run_discovery`` threads ``discovery_run_id`` through so the
-    real-LLM adapter can stamp it on ``llm_calls`` for cost rollups). The stub
-    ignores it.
+    real-LLM adapter can stamp it on ``llm_calls`` for cost rollups), and
+    ``taxonomy`` (the channel's curated topic/subtopic names, issue B4). The
+    stub ignores both — it always emits its fixed ``General`` / ``Cross-cutting``
+    shape, so re-runs are deterministic regardless of prior curation.
     """
     primary_assignments = [
         DiscoveryAssignment(
@@ -856,8 +886,36 @@ def run_discovery(
         )
         connection.commit()
 
+        # Load the channel's current curated taxonomy (topics + their
+        # subtopics) so the LLM can reuse the exact names rather than minting
+        # near-duplicates. ``topics.name`` already carries the renamed value
+        # (``rename_topic`` updates the row), so the list is rename-resolved.
+        # Empty on a first run; the prompt renderer skips the block then.
+        taxonomy_rows = connection.execute(
+            """
+            SELECT t.id AS topic_id, t.name AS topic_name, s.name AS subtopic_name
+            FROM topics t
+            LEFT JOIN subtopics s ON s.topic_id = t.id
+            WHERE t.project_id = ?
+            ORDER BY t.name COLLATE NOCASE, s.name COLLATE NOCASE
+            """,
+            (project_id,),
+        ).fetchall()
+        taxonomy: list[dict] = []
+        _tax_by_topic_id: dict[int, dict] = {}
+        for row in taxonomy_rows:
+            entry = _tax_by_topic_id.get(row["topic_id"])
+            if entry is None:
+                entry = {"topic": row["topic_name"], "subtopics": []}
+                _tax_by_topic_id[row["topic_id"]] = entry
+                taxonomy.append(entry)
+            if row["subtopic_name"] is not None:
+                entry["subtopics"].append(row["subtopic_name"])
+
         try:
-            payload = _call_llm_with_optional_correlation(llm, videos, run_id)
+            payload = _call_llm_with_optional_correlation(
+                llm, videos, run_id, taxonomy
+            )
         except Exception as exc:
             # LLM (or its retry) failed — flip the pre-allocated run to errored
             # so the failure is auditable, persist no partial topic / assignment
@@ -936,9 +994,18 @@ def run_discovery(
                         confidence, reason, discovery_run_id
                     ) VALUES (?, ?, 'secondary', 'auto', ?, ?, ?)
                     ON CONFLICT(video_id, topic_id) DO UPDATE SET
-                        assignment_source = excluded.assignment_source,
-                        confidence = excluded.confidence,
-                        reason = excluded.reason,
+                        assignment_source = CASE
+                            WHEN video_topics.assignment_source IN ('refine', 'manual')
+                            THEN video_topics.assignment_source
+                            ELSE excluded.assignment_source END,
+                        confidence = CASE
+                            WHEN video_topics.assignment_source IN ('refine', 'manual')
+                            THEN video_topics.confidence
+                            ELSE excluded.confidence END,
+                        reason = CASE
+                            WHEN video_topics.assignment_source IN ('refine', 'manual')
+                            THEN video_topics.reason
+                            ELSE excluded.reason END,
                         discovery_run_id = excluded.discovery_run_id
                     """,
                     (
@@ -967,9 +1034,18 @@ def run_discovery(
                             confidence, reason, discovery_run_id
                         ) VALUES (?, ?, 'auto', ?, ?, ?)
                         ON CONFLICT(video_id, subtopic_id) DO UPDATE SET
-                            assignment_source = excluded.assignment_source,
-                            confidence = excluded.confidence,
-                            reason = excluded.reason,
+                            assignment_source = CASE
+                                WHEN video_subtopics.assignment_source IN ('refine', 'manual')
+                                THEN video_subtopics.assignment_source
+                                ELSE excluded.assignment_source END,
+                            confidence = CASE
+                                WHEN video_subtopics.assignment_source IN ('refine', 'manual')
+                                THEN video_subtopics.confidence
+                                ELSE excluded.confidence END,
+                            reason = CASE
+                                WHEN video_subtopics.assignment_source IN ('refine', 'manual')
+                                THEN video_subtopics.reason
+                                ELSE excluded.reason END,
                             discovery_run_id = excluded.discovery_run_id
                         """,
                         (
