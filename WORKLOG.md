@@ -27,6 +27,24 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — Phase B slice 3: `refinement.py` core + `refine` CLI
+
+### Done
+- Merged B2 (`feat/issue-02-refinement-schema`) → `main` (FF) after reviewing the `_repair_video_topic_refine_source_constraint` CHECK-rebuild. Branched `feat/issue-03-refinement-core-and-cli` off `main`.
+- New `refinement.py`: `run_refinement` (3 stages — resolve+pool+pick / fetch transcripts w/o held connection / create-run+snapshot+`Extractor.run_batch`+persist; pending-before-spend, error-on-exception with run/episodes rows surviving), `select_refinement_sample` picker (⅔ coverage round-robin / ⅓ blind-spot + one replacement round), `refinement.transcript@refinement-v1` prompt in `extractor/`, `refinement_llm_via_extractor` / `make_real_refinement_llm_callable` (`RALPH_ALLOW_REAL_LLM=1` gate) / `stub_refinement_llm` (echo assignments + 1 subtopic proposal/episode + 1 topic proposal on episode 1), `RefinementEpisodeContext`/`RefinementPayload`/`RefinementRun`.
+- `cli.py`: `refine --db-path --project-name [--discovery-run-id] [--video-ids] [--sample-size] (--stub|--real) [--model] [--yes]` (`--stub` = stub LLM + `stub_transcript_fetcher`, fully offline; `--real` = gated callable + interactive/`--yes` cost confirm); `_resolve_fetch_transcript_video_ids` now resolves B1's `--refinement-run-id`.
+- New `test_refinement.py` (15 tests) → `.ralph/verify.sh`. Gate 334 green. `test_transcripts.py` untouched.
+- ROADMAP §B3 ticked; cheatsheet §2 `refine` entry; issue 03 marked DONE.
+
+### Learned
+- `write_refine_assignments` raising `ValueError` on an unknown topic in `assignments` *is* the right behavior — proposals must be accepted (→ real `topics` row) before a refine assignment can point at them; the prompt tells the LLM `assignments.topic` must be an existing taxonomy topic and to use `new_topic_proposals` otherwise. That ValueError is exactly the error path `run_refinement` rolls back + marks `error`.
+- Transcript fetch can't run inside the persistence connection — `upsert_video_transcript` opens its own connection per call, and N of those while holding a write lock would risk `database is locked`. So stage 2 holds no connection; stage 1 captures the pool data it needs in memory for the replacement round.
+
+### Next
+- B4 — discovery-prompt taxonomy awareness + never-downgrade a `refine`/`manual` row on a later `discover` run (small, independent). Then B5/B6 (Refine UI: sample-setup, then proposal-review). Recommended operator step before a real `refine`: a fresh `discover --real` on DOAC so the sample comes from a clean non-Short run; then `fetch-transcripts` for the sample, then `refine --real`.
+
+---
+
 ## 2026-05-11 — Phase B slice 2: refinement schema + db helpers
 
 ### Done

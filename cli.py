@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 import time
 from collections import Counter
@@ -164,9 +165,23 @@ def _resolve_fetch_transcript_video_ids(db_path: Path, args: argparse.Namespace)
         return [vid for vid in requested if not (vid in seen or seen.add(vid))]
 
     if args.refinement_run_id is not None:
-        raise ValueError(
-            "--refinement-run-id needs the Phase B refinement schema, which is not in this build yet"
-        )
+        with connect(db_path) as connection:
+            connection.row_factory = sqlite3.Row
+            episode_rows = connection.execute(
+                """
+                SELECT v.youtube_video_id AS youtube_video_id
+                FROM refinement_episodes re
+                JOIN videos v ON v.id = re.video_id
+                WHERE re.refinement_run_id = ?
+                ORDER BY re.video_id
+                """,
+                (args.refinement_run_id,),
+            ).fetchall()
+        if not episode_rows:
+            raise ValueError(
+                f"no episodes recorded for refinement run {args.refinement_run_id}"
+            )
+        return [row["youtube_video_id"] for row in episode_rows]
 
     # --missing-only / --limit: primary-channel videos with no transcript or a retryable one, newest first.
     missing = [
@@ -1004,6 +1019,56 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument(
         "--model",
         help="Override the Anthropic model id (defaults to extractor's DEFAULT_MODEL). Only used with --real.",
+    )
+
+    refine_parser = subparsers.add_parser(
+        "refine",
+        help=(
+            "Phase B: sample ~15 representative non-Short episodes of a project's "
+            "primary channel, re-judge each from its transcript (one LLM call per "
+            "transcript), and record taxonomy proposals + transcript-grade "
+            "assignments. Idempotent at the run level."
+        ),
+    )
+    refine_parser.add_argument("--db-path", required=True, help="Path to the SQLite database file.")
+    refine_parser.add_argument("--project-name", required=True, help="Project whose primary channel to refine.")
+    refine_parser.add_argument(
+        "--discovery-run-id",
+        type=int,
+        help="Refine episodes from this discovery run (default: the channel's latest).",
+    )
+    refine_parser.add_argument(
+        "--video-ids",
+        help="Comma-separated YouTube video IDs to use as the sample verbatim, bypassing the picker.",
+    )
+    refine_parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=15,
+        help="Target sample size when the picker is used (default 15).",
+    )
+    refine_mode = refine_parser.add_mutually_exclusive_group(required=True)
+    refine_mode.add_argument(
+        "--stub",
+        action="store_true",
+        help="Use a hardcoded fake LLM (no API call). Free and deterministic; recommended for wiring sanity checks.",
+    )
+    refine_mode.add_argument(
+        "--real",
+        action="store_true",
+        help=(
+            "Use the real Anthropic LLM. Requires RALPH_ALLOW_REAL_LLM=1 and ANTHROPIC_API_KEY; "
+            "prints a pre-flight cost estimate and asks for confirmation (~$0.40 per ~15-episode run)."
+        ),
+    )
+    refine_parser.add_argument(
+        "--model",
+        help="Override the Anthropic model id (defaults to extractor's DEFAULT_MODEL). Only used with --real.",
+    )
+    refine_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive cost confirmation for --real (assume yes).",
     )
 
     serve_review_ui_parser = subparsers.add_parser(
@@ -2202,6 +2267,86 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"Analyzed {metadata.youtube_channel_id} ({metadata.title}): "
             f"{len(videos)} videos, discovery run {run_id} (model={model})"
+        )
+        return 0
+
+    if args.command == "refine":
+        from yt_channel_analyzer.refinement import (
+            REFINEMENT_PROMPT_VERSION,
+            run_refinement,
+            stub_refinement_llm,
+        )
+
+        db_path = Path(args.db_path)
+        sample = None
+        if args.video_ids is not None:
+            sample = [vid.strip() for vid in args.video_ids.split(",") if vid.strip()]
+            if not sample:
+                parser.error("--video-ids was empty")
+
+        if args.real:
+            from yt_channel_analyzer.extractor.anthropic_runner import DEFAULT_MODEL
+            from yt_channel_analyzer.refinement import make_real_refinement_llm_callable
+
+            connection = connect(db_path)
+            llm = make_real_refinement_llm_callable(connection, model=args.model)
+            model_name = args.model or DEFAULT_MODEL
+
+            def confirm(info: dict) -> bool:
+                msg = (
+                    f"Refinement run {info['refinement_run_id']}: {info['n_episodes']} "
+                    f"transcript(s), estimated cost ~${info['estimated_cost_usd']:.4f} "
+                    f"(model={model_name}, prompt={REFINEMENT_PROMPT_VERSION})."
+                )
+                if args.yes:
+                    print(msg + " Proceeding (--yes).")
+                    return True
+                print(msg)
+                answer = input("Proceed with the real LLM call? [y/N] ").strip().lower()
+                return answer in ("y", "yes")
+
+            result = run_refinement(
+                db_path,
+                project_name=args.project_name,
+                discovery_run_id=args.discovery_run_id,
+                llm=llm,
+                sample=sample,
+                sample_size=args.sample_size,
+                model=model_name,
+                confirm=confirm,
+            )
+        else:
+            # --stub is a fully offline wiring check: stub LLM + the built-in
+            # fake transcript fetcher (no network, no API spend).
+            result = run_refinement(
+                db_path,
+                project_name=args.project_name,
+                discovery_run_id=args.discovery_run_id,
+                llm=stub_refinement_llm,
+                sample=sample,
+                sample_size=args.sample_size,
+                transcript_fetcher=stub_transcript_fetcher,
+            )
+
+        if result.status != "success":
+            print(
+                f"Refinement run {result.run_id} left {result.status} "
+                f"(discovery run {result.discovery_run_id})."
+            )
+            return 0
+        n_topic = sum(1 for p in result.proposals if p["kind"] == "topic")
+        n_subtopic = sum(1 for p in result.proposals if p["kind"] == "subtopic")
+        n_reassignments = sum(
+            r.get("topics_written", 0) + r.get("subtopics_written", 0)
+            for r in result.reassignments
+        )
+        print(
+            f"Refinement run {result.run_id} complete: "
+            f"{len(result.sampled_youtube_ids)} episode(s) sampled, "
+            f"{n_topic} topic + {n_subtopic} subtopic proposal(s), "
+            f"{n_reassignments} refine assignment(s) written. "
+            "Review proposals in the UI, then re-run `discover` to spread "
+            "accepted nodes channel-wide."
         )
         return 0
 

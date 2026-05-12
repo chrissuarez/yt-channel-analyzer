@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)/.."
 
-DEFAULT_TARGETS="yt_channel_analyzer.test_discovery yt_channel_analyzer.test_extractor yt_channel_analyzer.test_transcripts_fetch yt_channel_analyzer.test_refinement_schema"
+DEFAULT_TARGETS="yt_channel_analyzer.test_discovery yt_channel_analyzer.test_extractor yt_channel_analyzer.test_transcripts_fetch yt_channel_analyzer.test_refinement_schema yt_channel_analyzer.test_refinement"
 TARGETS="${RALPH_VERIFY_TARGETS:-$DEFAULT_TARGETS}"
 
 if [[ $# -gt 0 ]]; then

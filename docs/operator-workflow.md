@@ -165,6 +165,42 @@ not yet wired.
 
 ---
 
+## Phase B — sample-based transcript refinement
+
+Once a discovery run looks reasonable, refine a representative sample of
+episodes from their transcripts (one LLM call per transcript) to catch
+topics/subtopics the title+description pass missed and re-judge a few
+episodes from what was actually said. ~$0.40 for a ~15-episode sample.
+
+```bash
+# 1. (recommended) a fresh discovery run with the Shorts filter on, so the
+#    sample comes from a clean non-Short run
+RALPH_ALLOW_REAL_LLM=1 python3 -m yt_channel_analyzer.cli discover \
+  --db-path ./tmp/doac.sqlite --project-name "DOAC" --real
+
+# 2. wiring sanity check (offline — stub LLM + fake transcript fetcher)
+python3 -m yt_channel_analyzer.cli refine \
+  --db-path ./tmp/doac.sqlite --project-name "DOAC" --stub
+
+# 3. real run — prints the picked sample size + an estimated cost and asks
+#    to confirm before the LLM call (transcripts for the sample are fetched
+#    automatically; or pre-fetch with `fetch-transcripts`)
+RALPH_ALLOW_REAL_LLM=1 python3 -m yt_channel_analyzer.cli refine \
+  --db-path ./tmp/doac.sqlite --project-name "DOAC" --real        # --yes to skip the prompt
+
+# 4. inspect what it proposed
+sqlite3 ./tmp/doac.sqlite \
+  'SELECT kind, name, parent_topic_name, status FROM taxonomy_proposals ORDER BY id'
+```
+
+Accepting a proposal creates the real `topics`/`subtopics` row (review-UI
+screens for this are issues B5/B6). After accepting, re-run `discover`
+(taxonomy-aware once issue B4 lands) to spread the accepted nodes across
+the rest of the channel. `refinement_runs` rows are append-only like
+`discovery_runs`; a re-`refine` is non-destructive to earlier runs.
+
+---
+
 ## What's not in Phase A
 
 The legacy AI suggestion pipeline (`suggest-topics`,

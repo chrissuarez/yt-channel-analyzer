@@ -134,7 +134,19 @@ python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite
 python3 -m yt_channel_analyzer.cli fetch-transcripts --db-path ./tmp/test.sqlite --missing-only --stub
 ```
 
-Prints one line per video (`<id> | <status> | <source> | <language>`) and a closing tally. `--refinement-run-id R` is reserved for Phase B and errors until the refinement schema lands.
+Prints one line per video (`<id> | <status> | <source> | <language>`) and a closing tally. `--refinement-run-id R` fetches exactly the episodes recorded for that refinement run.
+
+### Refine a sample from transcripts (Phase B)
+
+Picks ~`--sample-size` representative non-Short episodes from a discovery run (⅔ topic-coverage / ⅓ blind-spot, one replacement round for dead transcripts), fetches any missing transcripts, makes one LLM call per transcript that re-judges the episode and proposes taxonomy nodes the metadata pass missed, then records a `refinement_runs` row + `taxonomy_proposals` + `refine`-source assignments. Idempotent at the run level. `--video-ids a,b,c` uses those as the sample verbatim. Review proposals in the UI, then re-run `discover` to spread accepted nodes channel-wide.
+
+```bash
+# fully offline wiring check — stub LLM + fake transcript fetcher, no spend
+python3 -m yt_channel_analyzer.cli refine --db-path ./tmp/test.sqlite --project-name "My Project" --stub
+
+# real run (needs RALPH_ALLOW_REAL_LLM=1 + ANTHROPIC_API_KEY); prints a cost estimate and asks to confirm
+RALPH_ALLOW_REAL_LLM=1 python3 -m yt_channel_analyzer.cli refine --db-path ./tmp/test.sqlite --project-name "My Project" --real         # add --yes to skip the prompt
+```
 
 ### Inspect import
 
