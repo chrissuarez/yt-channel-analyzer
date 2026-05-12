@@ -27,6 +27,19 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — Interactive UI smoke + Phase B feedback (no code changes)
+
+### Done
+- Served the review UI against `tmp/doac-sticky.sqlite`, seeded a stub refinement run (`refine --stub --discovery-run-id 9` → run 1: 15 ep, 16 proposals, 78 refine assignments) to populate the B6 proposal-review + before→after panels. Verified `/api/state` (`refine_proposals`/`refine_review` keys), `/api/refine/sample`, `/api/refine/status/<id>` all respond.
+
+### Learned / feedback (not yet actioned — see CURRENT_STATE next moves)
+- `doac-sticky.sqlite` is a deliberate curation stress fixture (10 mixed stub+real discovery runs layered via `video_topics` upserts) — bad for demos. Run 9 = stub (everything → "General"); the real Haiku categorization is run 8. The 4 real runs left near-duplicate topics (`AI & Technology`/`Technology & AI`/`Artificial Intelligence & Technology`; `Health & Biology`/`Health & Wellness`; …) — sticky-curation is exact-string-match, can't collapse them; `/api/discovery/topic/merge` is the manual fix.
+- Shorts visibility gap: the run-row "N shorts excluded" badge is hidden when `n_shorts_excluded` is NULL/0, so old/permissive runs look clean — and there's no per-episode "Short" pill in the topic drill-down. **Agreed: do A (shorts-visibility UI tweaks in `review_ui.py`), then C (real `discover --real`→`fetch-transcripts`→`refine --real` pass per `.scratch/phase-b-refinement/SMOKE.md` on a fresh DB).**
+- `stub_refinement_llm` only emits placeholder "Stub subtopic (General)" proposals — meaningful taxonomy proposals require `refine --real`.
+- `_resolve_discovery_run_id` picks the latest run by id regardless of status (grabbed errored run #10 for the auto sample) — maybe should prefer latest *successful*.
+
+---
+
 ## 2026-05-12 — B6 merged to main + planning docs synced
 
 ### Done

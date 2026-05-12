@@ -62,11 +62,14 @@ The strategy is **retrofit in place**, not greenfield — most of the existing ~
 
 Phase A and Phase B are both shipped. Phase A is validated on real DOAC data; **Phase B is code-complete (gate 369 green) but not yet exercised against real DOAC data.** The **shorts filter** feature is complete (3/3 slices merged 2026-05-11: `videos.duration_seconds` + per-channel/per-run `exclude_shorts` filter, default on, ≤180s cutoff; `discovery_runs` audit counts; review-UI shorts badge + per-episode length).
 
-**Next moves:**
-1. **Real DOAC operator pass through Phase B** — follow `.scratch/phase-b-refinement/SMOKE.md`: fresh `discover --real` on DOAC (Shorts default on → clean non-Short run) → Refine stage in the UI (sample → fetch transcripts → cost confirm (~$0.40/15 ep) → run → proposal review + before→after sanity panel → accept proposals) → re-run `discover --real` to spread accepted nodes channel-wide without downgrading the `refine` rows. Paid; needs `RALPH_ALLOW_REAL_LLM=1`.
-2. **Scope Phase C** — claim extraction / embeddings / clustering / synthesis. No PRD or slice breakdown yet (unlike Phase A/B). `~$8` one-time backlog spend for a DOAC-sized channel. Do (1) and live with the result before committing to (2).
+**Next moves (agreed 2026-05-12 — do A, then C):**
+1. **A — shorts-visibility UI tweaks** (`review_ui.py`, no spend). The "N shorts excluded · …" run-row badge (`_build_discovery_run` → `shorts_filter_badge`, ~line 5695) is hidden whenever `n_shorts_excluded` is NULL/0, so old/permissive runs look identical to clean ones. Make it always render, with an explicit "⚠ shorts filter off — N short clips included" variant; and add a per-episode "Short · m:ss" pill on episode cards in the Review/topic drill-down (`videos.duration_seconds` already available). ~30–40 lines; mind the >300-line `review_ui.py` HITL soft cap.
+2. **C — real DOAC operator pass through Phase B** — follow `.scratch/phase-b-refinement/SMOKE.md` on a **fresh throwaway DB** (not `tmp/doac-sticky.sqlite` — that's a deliberate 10-run stub+real curation stress fixture): `discover --real` (Shorts default on → clean run + badge shows) → Refine stage (sample → fetch transcripts → cost confirm ~$0.40/15 ep → run → proposal review + before→after → accept) → re-run `discover --real` to spread. Paid; `RALPH_ALLOW_REAL_LLM=1`. Only `--real` yields meaningful taxonomy proposals (the stub emits "Stub subtopic (General)" placeholders).
+3. **Scope Phase C** — claim extraction / embeddings / clustering / synthesis. No PRD or slice breakdown yet. ~$8 one-time backlog spend. Live with A+C results first.
 
 Smaller open threads still on the polish list:
+
+0. **`_resolve_discovery_run_id` picks latest run by id regardless of status** — the Refine auto-sample grabbed errored run #10 (no assignments → all-blind-spot sample). Should probably prefer the latest *successful* run.
 
 1. **Haiku subtopic-divergence auto-recover** ($-affecting). Live smoke surfaced Haiku occasionally producing assignments that reference subtopics it didn't declare in `payload.subtopics`. Strict validator in `discovery.py` raises `ValueError`; user pays ~$0.05 per occurrence. Fix: auto-recover by appending the missing subtopic to `payload.subtopics` before strict validation.
 2. **Server-side Supply sort.** `supplySort='oldest'` is currently a client-side `.reverse()` of the loaded N — shows oldest *of loaded N*, not channel's true oldest. Push the ORDER BY toggle into `_build_supply_videos`.
