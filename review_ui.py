@@ -78,7 +78,7 @@ from yt_channel_analyzer.youtube import (
 
 
 DEFAULT_SUGGESTION_MODEL = "gpt-4.1-mini"
-UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup-proposal-review-before-after"
+UI_REVISION = "2026-05-10.12-discover-streaming-poll-supply-pagination-edit-channel-form-run-discovery-button-wired-reingest-button-wired-discover-row-selects-run-discover-cost-comparison-readiness-run-history-advanced-channel-overview-discovery-panel-shorts-filter-badge-episode-duration-refine-stage-sample-setup-proposal-review-before-after-shorts-badge-always-visible-short-episode-pill"
 MIN_NEW_SUBTOPIC_CLUSTER_SIZE = 5
 REINGEST_DEFAULT_LIMIT = 50
 SUPPLY_DEFAULT_LIMIT = 50
@@ -2030,6 +2030,11 @@ HTML_PAGE = """<!doctype html>
       border-radius: 4px; background: rgba(15, 118, 110, 0.14); color: var(--teal);
       text-transform: uppercase; letter-spacing: 0.05em;
     }
+    .discovery-episode-short {
+      font-family: var(--mono); font-size: 10px; padding: 1px 5px;
+      border-radius: 4px; background: rgba(216, 90, 48, 0.14); color: var(--coral);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
 
     /* ---------- Consume stage ---------- */
     .consume-wrap {
@@ -3319,7 +3324,11 @@ HTML_PAGE = """<!doctype html>
         ? `<span>${escapeHtml(formatDate(episode.published_at))}</span>`
         : '';
       const durationStr = formatDuration(episode.duration_seconds);
-      const durationHtml = durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '';
+      const isShortEpisode = (typeof episode.duration_seconds === 'number')
+        && episode.duration_seconds > 0 && episode.duration_seconds <= 180;
+      const durationHtml = isShortEpisode
+        ? `<span class="discovery-episode-short" title="Short clip (≤ 180s) — normally excluded from discovery">Short${durationStr ? ' · ' + escapeHtml(durationStr) : ''}</span>`
+        : (durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '');
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -3406,7 +3415,11 @@ HTML_PAGE = """<!doctype html>
         ? `<span class="muted">${escapeHtml(formatDate(episode.published_at))}</span>`
         : '';
       const durationStr = formatDuration(episode.duration_seconds);
-      const durationHtml = durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '';
+      const isShortEpisode = (typeof episode.duration_seconds === 'number')
+        && episode.duration_seconds > 0 && episode.duration_seconds <= 180;
+      const durationHtml = isShortEpisode
+        ? `<span class="discovery-episode-short" title="Short clip (≤ 180s) — normally excluded from discovery">Short${durationStr ? ' · ' + escapeHtml(durationStr) : ''}</span>`
+        : (durationStr ? `<span class="muted">${escapeHtml(durationStr)}</span>` : '');
       return `
         <li class="discovery-episode${lowClass}">
           ${thumbHtml}
@@ -5516,7 +5529,8 @@ def _build_discovery_topic_map(
         connection.row_factory = sqlite3.Row
         _run_cols = (
             "id, channel_id, model, prompt_version, status, created_at, "
-            "n_shorts_excluded, n_orphaned_wrong_marks, n_orphaned_renames"
+            "shorts_cutoff_seconds, n_shorts_excluded, "
+            "n_orphaned_wrong_marks, n_orphaned_renames"
         )
         if run_id is None:
             run_row = connection.execute(
@@ -5692,20 +5706,40 @@ def _build_discovery_topic_map(
             "unassigned_within_topic": unassigned,
         }
 
-    # Read-only shorts-filter badge: hidden entirely when this run excluded no
-    # Shorts and orphaned no curation actions (no noise on channels with no
-    # Shorts). NULL audit values (filter was off) read as 0. Render-side only.
-    n_shorts_excluded = run_row["n_shorts_excluded"] or 0
+    # Read-only shorts-filter badge: ALWAYS rendered so a run's shorts posture
+    # is never ambiguous. Three states keyed off the run's audit columns —
+    # ``shorts_cutoff_seconds`` is non-NULL iff the filter was active for the
+    # run; both it and ``n_shorts_excluded`` are NULL on runs that predate the
+    # filter. Inert-curation note is appended when relevant. Render-side only.
+    shorts_cutoff = run_row["shorts_cutoff_seconds"]
+    n_shorts_excluded = run_row["n_shorts_excluded"]
     n_orphaned_wrong_marks = run_row["n_orphaned_wrong_marks"] or 0
     n_orphaned_renames = run_row["n_orphaned_renames"] or 0
     inert_curation_actions = n_orphaned_wrong_marks + n_orphaned_renames
-    if n_shorts_excluded == 0 and inert_curation_actions == 0:
-        shorts_filter_badge = None
+    inert_suffix = (
+        f" · {inert_curation_actions} curation actions inert (target episodes filtered)"
+        if inert_curation_actions
+        else ""
+    )
+    if shorts_cutoff is None and n_shorts_excluded is None:
+        shorts_filter_badge = (
+            "shorts filter status unknown — this run predates the filter" + inert_suffix
+        )
+    elif shorts_cutoff is not None:
+        n_excluded = n_shorts_excluded or 0
+        if n_excluded:
+            shorts_filter_badge = (
+                f"🩳 {n_excluded} short clip(s) excluded (≤ {int(shorts_cutoff)}s)"
+                + inert_suffix
+            )
+        else:
+            shorts_filter_badge = (
+                f"shorts filter on (≤ {int(shorts_cutoff)}s) — no short clips in this channel"
+                + inert_suffix
+            )
     else:
         shorts_filter_badge = (
-            f"{n_shorts_excluded} shorts excluded · "
-            f"{inert_curation_actions} curation actions inert "
-            "(target episodes filtered)"
+            "⚠ shorts filter off — short clips (≤ 180s) included in this run" + inert_suffix
         )
 
     return {

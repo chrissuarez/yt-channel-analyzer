@@ -27,6 +27,18 @@ Keep entries short and practical.
 
 ---
 
+## 2026-05-12 — A: shorts-visibility UI tweaks (`review_ui.py`, no spend)
+
+### Done
+- Run-row shorts badge (`_build_discovery_topic_map` → `shorts_filter_badge`) now **always renders** with three states keyed off the run's audit columns: filter on + N excluded → `🩳 N short clip(s) excluded (≤ 180s)`; filter on + 0 → `shorts filter on (≤ 180s) — no short clips in this channel`; filter off (new run) → `⚠ shorts filter off — short clips (≤ 180s) included in this run`; run predates the filter (`shorts_cutoff_seconds` & `n_shorts_excluded` both NULL) → `shorts filter status unknown — this run predates the filter`. Inert-curation note appended when relevant. Added `shorts_cutoff_seconds` to `_run_cols`.
+- Per-episode **"Short" pill** on episode cards in the Review/topic drill-down (both `renderDiscoveryEpisodeItem` variants): when `duration_seconds` ∈ (0, 180], the duration span becomes a coral `discovery-episode-short` pill `Short · m:ss` (new `.discovery-episode-short` CSS). Bumped `UI_REVISION`.
+- Updated `test_discovery.py` badge tests for the always-render behavior (`test_discovery_payload_carries_audit_counts_and_badge`, renamed `test_badge_hidden_when_filter_off_and_no_orphans` → `test_badge_flags_filter_off_when_disabled`). Verify gate green (`exit 0`, ~369 tests). +46/−12 in `review_ui.py`.
+
+### Next
+- C — real DOAC operator pass through Phase B per `.scratch/phase-b-refinement/SMOKE.md` on a fresh throwaway DB (paid, `RALPH_ALLOW_REAL_LLM=1`).
+
+---
+
 ## 2026-05-12 — Interactive UI smoke + Phase B feedback (no code changes)
 
 ### Done

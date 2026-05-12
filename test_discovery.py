@@ -7525,16 +7525,19 @@ class ShortsOrphanCountTests(unittest.TestCase):
             self.assertEqual(block2["n_orphaned_renames"], 1)
             self.assertEqual(
                 block2["shorts_filter_badge"],
-                "1 shorts excluded · 2 curation actions inert "
+                "🩳 1 short clip(s) excluded (≤ 180s) · 2 curation actions inert "
                 "(target episodes filtered)",
             )
 
-            # Filter-off run on this same channel: nothing excluded, nothing
-            # inert → the badge is suppressed entirely.
+            # Filter-off run on this same channel: the badge is always rendered
+            # and explicitly flags that short clips were included.
             block1 = _build_discovery_topic_map(db_path, run_id=run1)
-            self.assertIsNone(block1["shorts_filter_badge"])
+            self.assertEqual(
+                block1["shorts_filter_badge"],
+                "⚠ shorts filter off — short clips (≤ 180s) included in this run",
+            )
 
-    def test_badge_hidden_when_filter_off_and_no_orphans(self) -> None:
+    def test_badge_flags_filter_off_when_disabled(self) -> None:
         from yt_channel_analyzer.review_ui import build_state_payload
 
         with TemporaryDirectory() as tmpdir:
@@ -7542,8 +7545,9 @@ class ShortsOrphanCountTests(unittest.TestCase):
             self._seed(db_path, exclude_shorts=0)
             run1 = self._run(db_path)
             payload = build_state_payload(db_path, discovery_run_id=run1)
-            self.assertIsNone(
-                payload["discovery_topic_map"]["shorts_filter_badge"]
+            self.assertEqual(
+                payload["discovery_topic_map"]["shorts_filter_badge"],
+                "⚠ shorts filter off — short clips (≤ 180s) included in this run",
             )
 
 
